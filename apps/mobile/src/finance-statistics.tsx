@@ -141,13 +141,11 @@ function FilterForm({ current, report, today, accounts, categories, lang, onAppl
     {period === 'custom' && <View style={wideFields ? layout.dateInputs : layout.stackedFields}>
       <View style={wideFields && layout.dateInput}>
         <FinanceField title={t.from} hint={f.dateHint} value={from.text} onChangeText={from.setText}
-          keyboardType="numbers-and-punctuation" inputAccessoryViewID={undefined} returnKeyType="done"
-          maxLength={10} testID="statistics-from-date" />
+          keyboardType="numbers-and-punctuation" maxLength={10} testID="statistics-from-date" />
       </View>
       <View style={wideFields && layout.dateInput}>
         <FinanceField title={t.through} hint={f.dateHint} value={through.text} onChangeText={through.setText}
-          keyboardType="numbers-and-punctuation" inputAccessoryViewID={undefined} returnKeyType="done"
-          maxLength={10} testID="statistics-through-date" />
+          keyboardType="numbers-and-punctuation" maxLength={10} testID="statistics-through-date" />
       </View>
     </View>}
     <Choice title={t.type} value={type} onChange={(value) => {

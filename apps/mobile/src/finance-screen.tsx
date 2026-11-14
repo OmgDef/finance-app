@@ -690,6 +690,7 @@ function FinanceScreen({ page, inStack = false }: { page: Page; inStack?: boolea
         }} />}
       </View>}
     </ScrollView>
+    {/* Statistics date fields have a Done key. Mounting an accessory view on tab focus clips the scroll content on iOS. */}
     {focused && Platform.OS === 'ios' && (page.name === 'addAccount' || page.name === 'accountEditor' || reconciling || !!formKind ||
       (page.name === 'schedule' && (!!page.editor || !!page.skipDate))) &&
       <InputAccessoryView nativeID="finance-keyboard" backgroundColor={palette.ground}>
