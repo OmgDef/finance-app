@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useIsFocused } from 'expo-router';
 import { ActivityIndicator, Alert, Keyboard, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { Body, Language, Result } from '@teta/contracts';
 import { request } from './api';
@@ -9,12 +10,12 @@ import { financeCopy } from './finance-copy';
 import type { FinanceCopyKey } from './finance-copy';
 import { financialDate, formatFinancialDate, formatMoney } from './finance-format';
 import { useLocalizedInput } from './finance-forms';
+import type { AccountEditor } from './finance-navigation';
 import { FinanceAlert, FinanceButton, FinanceField, palette, styles } from './finance-ui';
 
 type Account = Result<'getAccountBalance'>;
 type Card = Result<'createAccountCard'>;
 type CardInput = Body<'createAccountCard'>;
-type Editor = { kind: 'rename' | 'startDate'; accountVersion: number } | { kind: 'card'; card?: Card };
 type Scope = 'account' | 'cards';
 type LoadResult = 'loading' | 'ready' | 'failed';
 
@@ -30,9 +31,13 @@ const accountErrors: Record<string, FinanceCopyKey> = {
 };
 const ambiguousErrors = ['NETWORK', 'INTERNAL_ERROR', 'TEMPORARY_FAILURE'];
 
-export function AccountManagement({ account, access, lang, disabled, onAccountChanged, onReconcile }: {
+export function AccountManagement({ account, access, lang, disabled, editor, notice, onAccountChanged, onReconcile,
+  onEdit, onBusy, onFinish }: {
   account: Account; access: FinanceAccess; lang: Language; disabled: boolean;
+  editor?: AccountEditor;
+  notice?: FinanceCopyKey;
   onAccountChanged: (account: Account) => void; onReconcile: () => void;
+  onEdit: (editor: AccountEditor) => void; onBusy: (busy: boolean) => void; onFinish: (result?: FinanceCopyKey) => void;
 }) {
   const t = financeCopy[lang];
   const accountId = account.accountId;
@@ -40,9 +45,10 @@ export function AccountManagement({ account, access, lang, disabled, onAccountCh
   const [cards, setCards] = useState<Card[]>([]);
   const [accountLoad, setAccountLoad] = useState<LoadResult>('loading');
   const [cardsLoad, setCardsLoad] = useState<LoadResult>('loading');
-  const [editor, setEditor] = useState<Editor>();
   const [message, setMessage] = useState<{ key: FinanceCopyKey; alert?: boolean }>();
+  const [uncertain, setUncertain] = useState(false);
   const [busy, setBusy] = useState(false);
+  const focused = useIsFocused();
   const mounted = useRef(false);
   const writing = useRef(false);
   const loadGeneration = useRef({ account: 0, cards: 0 });
@@ -81,23 +87,30 @@ export function AccountManagement({ account, access, lang, disabled, onAccountCh
 
   useEffect(() => {
     mounted.current = true;
-    void loadAccount();
-    void loadCards();
     return () => { mounted.current = false; };
   }, []);
+
+  useEffect(() => {
+    if (!focused) return;
+    if (editor?.kind !== 'card') void loadAccount();
+    if (!editor || (editor.kind === 'card' && editor.cardId)) void loadCards();
+  }, [focused, accountId]);
 
   async function mutate(scope: Scope, success: FinanceCopyKey, write: () => Promise<void>) {
     if (!current() || disabled || writing.current) return;
     writing.current = true;
     setBusy(true);
+    onBusy(true);
     setMessage(undefined);
     const refresh = scope === 'account' ? loadAccount : loadCards;
     try {
       await write();
       if (!current()) return;
-      setEditor(undefined);
-      setMessage({ key: success });
-      await refresh();
+      if (editor) onFinish(success);
+      else {
+        setMessage({ key: success });
+        await refresh();
+      }
     } catch (error) {
       if (!current()) return;
       const code = apiErrorCode(error);
@@ -106,13 +119,14 @@ export function AccountManagement({ account, access, lang, disabled, onAccountCh
       const message = unknown ? scope === 'account' ? 'accountOutcomeUnknown' : 'cardsOutcomeUnknown'
         : accountErrors[code] ?? 'error';
       setMessage({ key: message, alert: true });
-      if (unknown || code === 'VERSION_CONFLICT' || code === 'NOT_FOUND' || code === 'ACCOUNT_UNAVAILABLE') {
-        setEditor(undefined);
-      }
-      await refresh();
+      if (editor && unknown) setUncertain(true);
+      else await refresh();
     } finally {
       writing.current = false;
-      if (current()) setBusy(false);
+      if (current()) {
+        setBusy(false);
+        onBusy(false);
+      }
     }
   }
 
@@ -152,17 +166,24 @@ export function AccountManagement({ account, access, lang, disabled, onAccountCh
   }
 
   const blocked = disabled || busy;
+  const cardId = editor?.kind === 'card' ? editor.cardId : undefined;
+  const card = cardId ? cards.find((entry) => entry.cardId === cardId) : undefined;
+  const needsAccount = !editor || editor.kind !== 'card';
+  const needsCards = !editor || !!cardId;
+
+  const feedback = message ?? (notice && { key: notice, alert: false });
+
   return <View style={layout.section}>
-    <View style={layout.section}>
+    {!editor && <View style={layout.section}>
       <Text style={styles.title}>{snapshot.name}</Text>
       <Text style={styles.heroValue} testID="finance-managed-balance">{formatMoney(snapshot.balanceMinor, snapshot.currency, lang)}</Text>
       <Text style={styles.meta}>{t.startDate} · {formatFinancialDate(snapshot.startDate, lang)}</Text>
       {snapshot.archived && <Text style={styles.meta}>{t.archivedAccount}</Text>}
-    </View>
-    {message && (message.alert ? <FinanceAlert testID="finance-account-action-error">{t[message.key]}</FinanceAlert>
-      : <Text style={styles.label} accessibilityLiveRegion="polite" testID="finance-account-action-result">{t[message.key]}</Text>)}
-    {accountLoad === 'loading' && <ActivityIndicator color={palette.mint} accessibilityLabel={t.loading} />}
-    {accountLoad === 'failed' && <View style={layout.section}>
+    </View>}
+    {feedback && (feedback.alert ? <FinanceAlert testID="finance-account-action-error">{t[feedback.key]}</FinanceAlert>
+      : <Text style={styles.label} accessibilityLiveRegion="polite" testID="finance-account-action-result">{t[feedback.key]}</Text>)}
+    {needsAccount && accountLoad === 'loading' && <ActivityIndicator color={palette.accent} accessibilityLabel={t.loading} />}
+    {needsAccount && accountLoad === 'failed' && <View style={layout.section}>
       <FinanceAlert>{t.error}</FinanceAlert>
       <FinanceButton title={t.reloadAccount} disabled={busy} onPress={() => void loadAccount()} testID="finance-refresh-account" />
     </View>}
@@ -170,47 +191,49 @@ export function AccountManagement({ account, access, lang, disabled, onAccountCh
       {!snapshot.archived && <>
         <FinanceButton title={t.renameAccount} disabled={blocked} onPress={() => {
           setMessage(undefined);
-          setEditor({ kind: 'rename', accountVersion: snapshot.accountVersion });
+          onEdit({ kind: 'rename' });
         }} testID="finance-rename-account" />
         <FinanceButton title={t.changeStartDate} disabled={blocked} onPress={() => {
           setMessage(undefined);
-          setEditor({ kind: 'startDate', accountVersion: snapshot.accountVersion });
+          onEdit({ kind: 'startDate' });
         }} testID="finance-change-start-date" />
         <FinanceButton title={t.reconcileAccount} disabled={blocked} onPress={onReconcile} testID="finance-reconcile-account" />
       </>}
       <FinanceButton title={snapshot.archived ? t.restoreAccount : t.archiveAccount} disabled={blocked} onPress={changeArchive}
         testID={snapshot.archived ? 'finance-restore-account' : 'finance-archive-account'} />
     </View>}
-    {editor?.kind === 'rename' && <NameEditor name={snapshot.name} lang={lang} disabled={blocked}
-      onCancel={() => setEditor(undefined)} onSave={(name) => void mutate('account', 'accountRenamed', async () => {
+    {editor && accountLoad === 'ready' && snapshot.archived && <FinanceAlert>{t.unavailable}</FinanceAlert>}
+    {!uncertain && editor?.kind === 'rename' && accountLoad === 'ready' && !snapshot.archived && <NameEditor
+      key={snapshot.accountVersion} name={snapshot.name} lang={lang} disabled={blocked}
+      onCancel={onFinish} onSave={(name) => void mutate('account', 'accountRenamed', async () => {
         const updated = await request('renameAccount', { token: access.token, params: { accountId },
-          body: { name, expectedAccountVersion: editor.accountVersion } });
+          body: { name, expectedAccountVersion: snapshot.accountVersion } });
         if (access.isCurrent()) onAccountChanged(updated);
         if (current()) setSnapshot(updated);
       })} />}
-    {editor?.kind === 'startDate' && <StartDateEditor account={snapshot} today={access.profile.today} lang={lang} disabled={blocked}
-      onCancel={() => { setEditor(undefined); setMessage(undefined); }}
+    {!uncertain && editor?.kind === 'startDate' && accountLoad === 'ready' && !snapshot.archived && <StartDateEditor
+      key={snapshot.accountVersion} account={snapshot} today={access.profile.today} lang={lang} disabled={blocked}
+      onCancel={onFinish}
       onSave={(startDate) => void mutate('account', 'startDateSaved', async () => {
         const updated = await request('updateAccountStartDate', { token: access.token, params: { accountId },
-          body: { startDate, expectedAccountVersion: editor.accountVersion } });
+          body: { startDate, expectedAccountVersion: snapshot.accountVersion } });
         if (access.isCurrent()) onAccountChanged(updated);
         if (current()) setSnapshot(updated);
       })} />}
-    {editor?.kind === 'card' ? <CardEditor card={editor.card} lang={lang} disabled={blocked}
-      onCancel={() => setEditor(undefined)} onSave={(body) => saveCard(body, editor.card)}
-      onDelete={editor.card ? () => removeCard(editor.card!) : undefined} /> : !editor && <View style={layout.section}>
-      <Text accessibilityRole="header" style={styles.section} testID="finance-cards">{t.cards}</Text>
-      {cardsLoad === 'loading' && <ActivityIndicator color={palette.mint} accessibilityLabel={t.loading} />}
+    {!editor && <Text accessibilityRole="header" style={styles.section} testID="finance-cards">{t.cards}</Text>}
+    {needsCards && <View style={layout.section}>
+      {cardsLoad === 'loading' && <ActivityIndicator color={palette.accent} accessibilityLabel={t.loading} />}
       {cardsLoad === 'failed' && <>
         <FinanceAlert>{t.error}</FinanceAlert>
         <FinanceButton title={t.reloadCards} disabled={busy} onPress={() => void loadCards()} testID="finance-refresh-cards" />
       </>}
-      {cardsLoad === 'ready' && <>
+      {editor?.kind === 'card' && cardsLoad === 'ready' && !card && <FinanceAlert>{t.unavailable}</FinanceAlert>}
+      {!editor && cardsLoad === 'ready' && <>
         {cards.length ? <View style={layout.cards}>
           {cards.map((card, index) => <Pressable accessibilityRole="button" disabled={blocked}
             key={card.cardId} testID={'finance-card-' + card.cardId} onPress={() => {
               setMessage(undefined);
-              setEditor({ kind: 'card', card });
+              onEdit({ kind: 'card', cardId: card.cardId });
             }} style={({ pressed }) => [layout.card, index > 0 && layout.cardDivider, pressed && layout.pressed]}>
             <View style={layout.cardIdentity}>
               <View style={[layout.swatch, { backgroundColor: card.appearance }]} />
@@ -224,10 +247,12 @@ export function AccountManagement({ account, access, lang, disabled, onAccountCh
         </View> : <Text style={styles.meta}>{t.noCards}</Text>}
         <FinanceButton title={t.addCard} disabled={blocked} onPress={() => {
           setMessage(undefined);
-          setEditor({ kind: 'card' });
+          onEdit({ kind: 'card' });
         }} testID="finance-add-card" />
       </>}
     </View>}
+    {!uncertain && editor?.kind === 'card' && (!cardId || card) && <CardEditor card={card} lang={lang} disabled={blocked}
+      onCancel={onFinish} onSave={(body) => saveCard(body, card)} onDelete={card ? () => removeCard(card) : undefined} />}
   </View>;
 }
 
@@ -299,7 +324,6 @@ function CardEditor({ card, lang, disabled, onSave, onDelete, onCancel }: {
     onSave({ name: name.trim(), appearance: color.trim().toUpperCase(), lastFour: lastFour || null });
   }
   return <View style={layout.form}>
-    <Text accessibilityRole="header" style={styles.section}>{card ? t.editCard : t.addCard}</Text>
     <FinanceField title={t.cardName} value={name} onChangeText={setName} editable={!disabled} maxLength={255} testID="finance-card-name" />
     <FinanceField title={t.cardLastFour} value={lastFour} onChangeText={setLastFour} editable={!disabled} maxLength={4}
       keyboardType="number-pad" testID="finance-card-last-four" />

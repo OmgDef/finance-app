@@ -1,9 +1,10 @@
 export const financeCopy = {
   en: {
-    products: 'Products', balances: 'Balances by currency', accounts: 'Accounts', archived: 'Archived accounts',
+    balances: 'Balances by currency', accounts: 'Accounts', myAccounts: 'My accounts', archived: 'Archived accounts',
     addAccount: 'Add account', expense: 'Record expense', history: 'History', loadMore: 'More transactions',
     income: 'Record income', newTransfer: 'Record transfer',
-    noAccounts: 'Add an account to start tracking your money.', loading: 'Loading…', refresh: 'Refresh',
+    noAccounts: 'Add an account to start tracking your money.', noArchived: 'No archived accounts.',
+    loading: 'Loading…', refresh: 'Refresh',
     accountName: 'Account name', type: 'Account type', regular: 'Account', cash: 'Cash', deposit: 'Deposit',
     currency: 'Currency', startDate: 'Start date', opening: 'Opening balance', rate: 'Annual rate (%)',
     maturity: 'Maturity date', account: 'Account', category: 'Category', amount: 'Amount', comment: 'Comment (optional)',
@@ -81,10 +82,11 @@ export const financeCopy = {
     error: 'Could not complete the request. Try again.',
   },
   ru: {
-    products: 'Продукты', balances: 'Остатки по валютам', accounts: 'Счета', archived: 'Архивные счета',
+    balances: 'Остатки по валютам', accounts: 'Счета', myAccounts: 'Мои счета', archived: 'Архив счетов',
     addAccount: 'Добавить счёт', expense: 'Записать расход', history: 'История', loadMore: 'Ещё операции',
     income: 'Записать доход', newTransfer: 'Записать перевод',
-    noAccounts: 'Добавьте счёт, чтобы начать вести учёт.', loading: 'Загрузка…', refresh: 'Обновить',
+    noAccounts: 'Добавьте счёт, чтобы начать вести учёт.', noArchived: 'В архиве нет счетов.',
+    loading: 'Загрузка…', refresh: 'Обновить',
     accountName: 'Название счёта', type: 'Тип счёта', regular: 'Счёт', cash: 'Наличные', deposit: 'Вклад',
     currency: 'Валюта', startDate: 'Дата начала учёта', opening: 'Начальный остаток', rate: 'Годовая ставка (%)',
     maturity: 'Дата окончания', account: 'Счёт', category: 'Категория', amount: 'Сумма', comment: 'Комментарий (необязательно)',

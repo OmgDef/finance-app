@@ -27,7 +27,7 @@ export type ScheduleRule = Result<'getScheduleRule'>;
 export type ScheduleOccurrence = Result<'listScheduleOccurrences'>['occurrences'][number];
 type Create = Body<'createScheduleRule'>;
 type Change = Body<'changeScheduleRule'>;
-const rangeDays = 90;
+export const scheduleRangeDays = 90;
 
 function canSkip(entry: ScheduleOccurrence) {
   return !entry.recoveryHeld && (entry.status === 'due' || entry.status === 'retrying' || entry.status === 'needs_intervention');
@@ -61,7 +61,7 @@ function ScheduleSkipForm({ entry, lang, disabled, onSubmit }: {
 }
 
 export function ScheduleScreen({ page, access, accounts, categories, lang, disabled, visible, refreshSignal,
-  commandError, onSubmit, onPage, onSaving, onTransaction }: {
+  commandError, onSubmit, onPage, onSaving, onCancel, onSaved, onTransaction }: {
   page: SchedulePage;
   access: FinanceAccess;
   accounts: Account[] | undefined;
@@ -74,6 +74,8 @@ export function ScheduleScreen({ page, access, accounts, categories, lang, disab
   onSubmit: (draft: FinanceDraft) => void;
   onPage: (page: SchedulePage) => void;
   onSaving: (saving: boolean) => void;
+  onCancel: () => void;
+  onSaved: (page: SchedulePage, created: boolean) => void;
   onTransaction: (entry: ScheduleOccurrence) => void;
 }) {
   const t = scheduleCopy[lang];
@@ -94,8 +96,8 @@ export function ScheduleScreen({ page, access, accounts, categories, lang, disab
   const writeScope = useRef('');
   const displayed = useRef(visible);
   displayed.current = visible;
-  const from = addFinancialDays(today, offset * rangeDays);
-  const through = addFinancialDays(from, rangeDays - 1);
+  const from = addFinancialDays(today, offset * scheduleRangeDays);
+  const through = addFinancialDays(from, scheduleRangeDays - 1);
   const key = [accountId, ruleId, from, timeZone].join(':');
   const viewKey = key + ':' + (editor ?? skipDate ?? '');
   const writeKey = [accountId, ruleId, editor].join(':');
@@ -159,10 +161,6 @@ export function ScheduleScreen({ page, access, accounts, categories, lang, disab
     return () => { reading.current += 1; };
   }, [viewKey, visible, refreshVersion, refreshSignal]);
 
-  useEffect(() => {
-    if (skipDate && commandError === 'SCHEDULE_DATE_CONFLICT') show({ ...page, skipDate: undefined });
-  }, [commandError, skipDate]);
-
   function show(next: SchedulePage) {
     reading.current += 1;
     setReadError('');
@@ -172,7 +170,7 @@ export function ScheduleScreen({ page, access, accounts, categories, lang, disab
 
   function refresh() {
     setWriteError('');
-    if (editing) show({ ...page, editor: undefined, skipDate: undefined });
+    if (editing) onCancel();
     else setRefreshVersion((version) => version + 1);
   }
 
@@ -191,7 +189,7 @@ export function ScheduleScreen({ page, access, accounts, categories, lang, disab
       if (!current() || !updated) return;
       if (editor) {
         const nextOffset = editor === 'create' && updated.firstDate < today ? scheduleOffset(today, updated.firstDate) : offset;
-        show({ ...page, ruleId: updated.ruleId, editor: undefined, offset: nextOffset });
+        onSaved({ ...page, ruleId: updated.ruleId, editor: undefined, offset: nextOffset }, editor === 'create');
       }
       else {
         setSnapshot((previous) => previous?.key === key ? { ...previous, rules: [updated] } : previous);
@@ -229,15 +227,13 @@ export function ScheduleScreen({ page, access, accounts, categories, lang, disab
   const canCreate = accounts?.some((item) => !item.archived && (!accountId || item.accountId === accountId));
 
   return <View style={layout.section} testID="schedule-screen">
-    <Text accessibilityRole="header" style={styles.heading}>{editor === 'create' ? t.newRule : editor === 'edit' ? t.edit
-      : editor === 'replace' ? t.replacing : skipDate ? t.skip : ruleId ? t.rule : t.schedule}</Text>
     {selectedAccount && <Text style={styles.meta}>{editor === 'replace' && t.source + ' · '}{selectedAccount.name}</Text>}
-    {busy && !active && <ActivityIndicator color={palette.mint} accessibilityLabel={f.loading} />}
+    {busy && !active && <ActivityIndicator color={palette.accent} accessibilityLabel={f.loading} />}
     {problem && <View style={layout.group}>
       <FinanceAlert>{errorLabel}</FinanceAlert>
       {(readError || mustRefresh) && <FinanceButton title={t.reload} onPress={refresh} disabled={busy || saving} testID="schedule-reload" />}
     </View>}
-    {editor && !categories && !problem && <ActivityIndicator color={palette.mint} accessibilityLabel={f.loading} />}
+    {editor && !categories && !problem && <ActivityIndicator color={palette.accent} accessibilityLabel={f.loading} />}
     {editor === 'create' && accounts && categories && canCreate && <ScheduleEditor mode="create" lang={lang} accounts={accounts}
       categories={categories} scopedAccountId={accountId} today={today} disabled={disabled || saving || busy || !!readError || mustRefresh}
       onSave={(body) => void save(body)} />}
@@ -247,8 +243,10 @@ export function ScheduleScreen({ page, access, accounts, categories, lang, disab
     {editor === 'replace' && selectedRule && accounts && categories && <ScheduleReplacement key={selectedRule.ruleId}
       rule={selectedRule} accounts={accounts} categories={categories} lang={lang} access={access} visible={visible}
       disabled={disabled || saving || !!readError} commandError={commandError} onSubmit={onSubmit} />}
-    {skipDate && (skipTarget ? <ScheduleSkipForm key={skipTarget.ruleId + skipDate} entry={skipTarget} lang={lang}
-      disabled={disabled || busy || saving || !!readError} onSubmit={onSubmit} /> : active && <FinanceAlert>{t.skipChanged}</FinanceAlert>)}
+    {skipDate && (commandError === 'SCHEDULE_DATE_CONFLICT'
+      ? <FinanceButton title={t.reload} onPress={onCancel} disabled={disabled} testID="schedule-reload" />
+      : skipTarget ? <ScheduleSkipForm key={skipTarget.ruleId + skipDate} entry={skipTarget} lang={lang}
+        disabled={disabled || busy || saving || !!readError} onSubmit={onSubmit} /> : active && <FinanceAlert>{t.skipChanged}</FinanceAlert>)}
     {!editing && !ruleId && <>
       {canCreate && <FinanceButton title={t.newRule} onPress={() => show({ ...page, editor: 'create' })} primary
         disabled={disabled || saving || busy} testID="schedule-create" />}
@@ -358,7 +356,7 @@ export function ScheduleScreen({ page, access, accounts, categories, lang, disab
 
 export function scheduleOffset(today: string, date: string) {
   const time = (day: string) => Date.parse(day + 'T00:00:00Z');
-  return Math.floor((time(date) - time(today)) / (rangeDays * 86_400_000));
+  return Math.floor((time(date) - time(today)) / (scheduleRangeDays * 86_400_000));
 }
 
 const layout = StyleSheet.create({
@@ -373,5 +371,5 @@ const layout = StyleSheet.create({
   identity: { ...styles.title, flexGrow: 1, flexBasis: '50%' },
   amount: { ...styles.title, textAlign: 'right', fontVariant: ['tabular-nums'] },
   link: { alignSelf: 'flex-start', minHeight: 44, justifyContent: 'center' },
-  linkText: { ...styles.title, color: palette.mint },
+  linkText: { ...styles.title, color: palette.accent },
 });

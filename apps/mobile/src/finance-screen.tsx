@@ -1,9 +1,12 @@
-import { useEffect, useRef, useState } from 'react';
+import { createContext, use, useEffect, useRef, useState } from 'react';
 import type { ComponentRef, ReactNode } from 'react';
+import { Redirect, Stack, useGlobalSearchParams, useIsFocused, useLocalSearchParams, usePathname, usePreventRemove, useRouter } from 'expo-router';
 import {
-  ActivityIndicator, Alert, BackHandler, InputAccessoryView, Keyboard, Platform, Pressable, RefreshControl, ScrollView,
+  ActivityIndicator, Alert, InputAccessoryView, Keyboard, Platform, Pressable, RefreshControl, ScrollView,
   StyleSheet, Text, View, useWindowDimensions,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { useAccessSession } from './access-session';
 import type { Language, Result } from '@teta/contracts';
 import { request } from './api';
 import { copy } from './copy';
@@ -11,35 +14,31 @@ import { AccountManagement } from './finance-account-management';
 import { apiErrorCode, useFinanceCommand } from './finance-commands';
 import type { CommandResult, FinanceAccess, FinanceCommand, TransactionFields } from './finance-commands';
 import { financeCopy } from './finance-copy';
-import { currencies, formatFinancialDate, formatMoney, formatProfileMoment, formatRate } from './finance-format';
+import type { FinanceCopyKey } from './finance-copy';
+import { currencies, formatAmount, formatFinancialDate, formatMoney, formatProfileMoment, formatRate } from './finance-format';
 import type { Currency } from './finance-format';
 import { AccountForm, TransactionForm } from './finance-forms';
+import { FinanceIcon } from './finance-icon';
+import { PaymentsScreen } from './finance-payments';
 import { ReconciliationForm, reconciliationConflict } from './finance-reconciliation';
 import { ScheduleScreen, scheduleOffset } from './finance-schedule';
-import type { SchedulePage } from './finance-schedule';
+import { financeHref, financePage, financePath, routeParameter } from './finance-navigation';
+import type { FinancePage, FinanceRoute } from './finance-navigation';
 import { scheduleCopy } from './finance-schedule-copy';
 import { StatisticsScreen, useStatistics } from './finance-statistics';
-import { statisticsCopy } from './finance-statistics-copy';
+import { appTabs } from './finance-tabs';
+import type { FinanceTab } from './finance-tabs';
 import { revisionFields, TransactionVersions } from './finance-transaction';
-import type { TransactionHistory } from './finance-transaction';
 import { FinanceAlert, FinanceButton, palette, styles } from './finance-ui';
 import { SupportScreen } from './support-screen';
 
 type Account = Result<'listAccounts'>['accounts'][number];
-type History = Result<'listAccountHistory'>;
 type Category = Result<'listCategories'>['categories'][number];
-type TransactionPage = { name: 'transaction'; accountId: string | null; transactionId: string;
-  scheduleOrigin?: SchedulePage; fromStatistics?: true };
-type Page = { name: 'products' | 'payments' | 'statistics' | 'support' } | { name: 'addAccount' } | SchedulePage |
-  { name: 'history'; accountId: string } | { name: 'record'; kind: TransactionFields['type']; accountId: string | null;
-    fromPayments?: boolean } |
-  { name: 'manage' | 'reconcile'; accountId: string } |
-  TransactionPage | { name: 'revise'; origin: TransactionPage; initial: TransactionFields; version: number };
+type Page = { name: Exclude<FinanceTab, 'settings'> } | FinancePage;
 type Receipt = { command: FinanceCommand; result: CommandResult };
-const products: Page = { name: 'products' };
-const payments: Page = { name: 'payments' };
-const statisticsPage: Page = { name: 'statistics' };
-const supportPage: Page = { name: 'support' };
+type RouteReceipt = Receipt & { path: string; returnFrom?: string };
+type Destination = { page: FinancePage; returnToOrigin?: boolean; receipt?: Receipt };
+type AccountNotice = { accountId: string; key: FinanceCopyKey };
 
 function localizedError(code: string, lang: Language, context?: 'reconcile' | 'schedule' | 'replace') {
   const t = financeCopy[lang];
@@ -63,43 +62,25 @@ function localizedError(code: string, lang: Language, context?: 'reconcile' | 's
   }
 }
 
-export function FinanceScreen({ access, lang, visible, timeZoneSuggestion }: {
-  access: FinanceAccess; lang: Language; visible: boolean; timeZoneSuggestion?: ReactNode;
-}) {
-  const t = financeCopy[lang];
-  const s = scheduleCopy[lang];
-  const reportCopy = statisticsCopy[lang];
-  const { width, fontScale } = useWindowDimensions();
-  const wrapTabs = Math.min(width, 540) / Math.min(fontScale, 1.35) < 360;
-  const [page, setPage] = useState<Page>(products);
-  const statistics = useStatistics(access, visible && page.name === 'statistics');
+function useWorkspaceModel(access: FinanceAccess, lang: Language) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const { accountId } = useGlobalSearchParams();
+  const location = useRef({ pathname, accountId: routeParameter(accountId) });
+  location.current = { pathname, accountId: routeParameter(accountId) };
   const [accounts, setAccounts] = useState<Account[]>();
   const [categories, setCategories] = useState<Category[]>();
   const [listError, setListError] = useState('');
   const [categoryError, setCategoryError] = useState('');
   const [refreshing, setRefreshing] = useState(false);
-  const [history, setHistory] = useState<History>();
-  const [historyError, setHistoryError] = useState('');
-  const [historyBusy, setHistoryBusy] = useState(false);
-  const [transaction, setTransaction] = useState<TransactionHistory>();
-  const [transactionError, setTransactionError] = useState('');
-  const [transactionBusy, setTransactionBusy] = useState(false);
-  const [receipt, setReceipt] = useState<Receipt | null>(null);
-  const scheduleSaving = useRef(false);
-  const currentPage = useRef(page);
-  currentPage.current = page;
-  const scroll = useRef<ComponentRef<typeof ScrollView>>(null);
-  const [scheduleBusy, setScheduleBusy] = useState(false);
-  const [scheduleRefresh, setScheduleRefresh] = useState(0);
+  const [receipt, setReceipt] = useState<RouteReceipt | null>(null);
+  const [destination, setDestination] = useState<Destination>();
+  const [accountNotice, setAccountNotice] = useState<AccountNotice>();
+  const [revision, setRevision] = useState(0);
   const accountsRequest = useRef(0);
   const categoriesRequest = useRef(0);
-  const historyRequest = useRef(0);
-  const transactionRequest = useRef(0);
   const activeAccounts = accounts?.filter((account) => !account.archived) ?? [];
   const archivedAccounts = accounts?.filter((account) => account.archived) ?? [];
-  const historyId = page.name === 'history' ? page.accountId : null;
-  const accountId = page.name === 'history' || page.name === 'manage' || page.name === 'reconcile' ? page.accountId : null;
-  const account = accountId && accounts?.find((entry) => entry.accountId === accountId);
 
   async function loadAccounts() {
     if (!access.isCurrent()) return;
@@ -147,154 +128,168 @@ export function FinanceScreen({ access, lang, visible, timeZoneSuggestion }: {
     }
   }
 
-  async function loadHistory(accountId: string, before?: string) {
-    if (!access.isCurrent()) return;
-    const attempt = ++historyRequest.current;
-    const current = () => attempt === historyRequest.current && access.isCurrent();
-    setHistoryBusy(true);
-    setHistoryError('');
-    try {
-      const result = await request('listAccountHistory', { token: access.token, params: { accountId },
-        query: before ? new URLSearchParams({ before }) : undefined });
-      if (current()) {
-        setHistory((previous) => before && previous?.accountId === result.accountId
-          ? { ...result, entries: [...previous.entries, ...result.entries] } : result);
-      }
-    } catch (error) {
-      if (current()) {
-        const code = apiErrorCode(error);
-        if (!access.onAccessFailure(code)) setHistoryError(code);
-      }
-    } finally {
-      if (current()) setHistoryBusy(false);
-    }
-  }
-
-  async function loadTransaction(transactionId: string) {
-    if (!access.isCurrent()) return;
-    const attempt = ++transactionRequest.current;
-    const current = () => attempt === transactionRequest.current && access.isCurrent();
-    setTransactionBusy(true);
-    setTransactionError('');
-    try {
-      const result = await request('listTransactionVersions', { token: access.token, params: { transactionId } });
-      if (current()) setTransaction(result);
-    } catch (error) {
-      if (current()) {
-        const code = apiErrorCode(error);
-        if (!access.onAccessFailure(code)) setTransactionError(code);
-      }
-    } finally {
-      if (current()) setTransactionBusy(false);
-    }
-  }
-
-  function go(next: Page, result: Receipt | null = null) {
-    historyRequest.current += 1;
-    transactionRequest.current += 1;
-    setHistory(undefined);
-    setHistoryError('');
-    setHistoryBusy(false);
-    setTransaction(undefined);
-    setTransactionError('');
-    setTransactionBusy(false);
-    setReceipt(result);
-    setPage(next);
-    if (next.name === 'statistics' && currentPage.current.name !== 'statistics') statistics.refresh();
-    if (next.name === 'schedule') scroll.current?.scrollTo({ y: 0, animated: false });
-    if (next.name === 'history') void loadHistory(next.accountId);
-    if (next.name === 'transaction') void loadTransaction(next.transactionId);
-  }
-
-  function back() {
-    if (page.name === 'schedule' && (scheduleSaving.current || command.busy)) return;
+  function go(next: FinancePage) {
+    Keyboard.dismiss();
     command.clearError();
-    if (page.name === 'revise') go(page.origin);
-    else if (page.name === 'reconcile') go({ name: 'manage', accountId: page.accountId });
-    else if (page.name === 'manage') go({ name: 'history', accountId: page.accountId });
-    else if (page.name === 'transaction' && page.scheduleOrigin) go(page.scheduleOrigin);
-    else if (page.name === 'transaction' && page.fromStatistics) go(statisticsPage);
-    else if (page.name === 'schedule') {
-      if (page.editor || page.skipDate) go({ ...page, editor: undefined, skipDate: undefined });
-      else if (page.ruleId) go({ ...page, ruleId: undefined });
-      else if (page.accountId) go({ name: 'history', accountId: page.accountId });
-      else go(payments);
-    }
-    else if ((page.name === 'record' || page.name === 'transaction') && page.accountId) go({ name: 'history', accountId: page.accountId });
-    else if (page.name === 'record' && page.fromPayments) go(payments);
-    else go(products);
+    router.push(financeHref(next));
+  }
+
+  function invalidate() {
+    setRevision((value) => value + 1);
   }
 
   const command = useFinanceCommand(access, (result, kind) => {
     const receipt = { command: kind, result };
+    const current = location.current;
     void loadAccounts();
+    invalidate();
     if ('occurrenceId' in result || 'replacementRule' in result) {
-      const origin = currentPage.current.name === 'schedule' ? currentPage.current : undefined;
-      const target = 'occurrenceId' in result ? { ruleId: result.ruleId, date: result.date }
-        : { ruleId: result.replacementRule.ruleId, date: result.replacementRule.firstDate };
-      setScheduleRefresh((signal) => signal + 1);
-      go({ name: 'schedule', accountId: origin?.accountId ?? null, ruleId: target.ruleId,
-        offset: scheduleOffset(access.profile.today, target.date) }, receipt);
+      const skipping = 'occurrenceId' in result;
+      const ruleId = skipping ? result.ruleId : result.replacementRule.ruleId;
+      const date = skipping ? result.date : result.replacementRule.firstDate;
+      setDestination({ page: { name: 'schedule', accountId: current.accountId ?? null, ruleId,
+        offset: scheduleOffset(access.profile.today, date) }, returnToOrigin: skipping && current.pathname.includes('/skip/'), receipt });
+    } else if ('transactionId' in result) {
+      const page = { name: 'transaction' as const, transactionId: result.transactionId };
+      const path = financePath(page);
+      if (current.pathname === path) setReceipt({ ...receipt, path });
+      else setDestination({ page, returnToOrigin: current.pathname === path + '/edit', receipt });
+    } else if ('accountId' in result) {
+      const page = { name: 'history' as const, accountId: result.accountId };
+      setDestination({ page, returnToOrigin: current.pathname === financePath(page) + '/reconcile', receipt });
     }
-    else if ('accountId' in result) go({ name: 'history', accountId: result.accountId }, receipt);
-    else if ('fromAccount' in result) go({ name: 'history', accountId: result.fromAccount.accountId }, receipt);
-    else if ('accounts' in result) {
-      const origin = page.name === 'revise' ? page.origin : page.name === 'transaction' ? page : null;
-      go({ name: 'transaction', transactionId: result.transactionId,
-        accountId: origin?.transactionId === result.transactionId ? origin.accountId : null,
-        scheduleOrigin: origin?.transactionId === result.transactionId ? origin.scheduleOrigin : undefined,
-        fromStatistics: origin?.transactionId === result.transactionId ? origin.fromStatistics : undefined }, receipt);
-    } else go(products, receipt);
   });
 
-  function openRecord(kind: TransactionFields['type'], accountId: string | null) {
-    command.clearError();
-    go({ name: 'record', kind, accountId, fromPayments: page.name === 'payments' });
-  }
+  useEffect(() => {
+    if (!destination || command.busy || !access.isCurrent()) return;
+    setDestination(undefined);
+    const path = financePath(destination.page);
+    const back = destination.returnToOrigin && router.canDismiss();
+    if (destination.receipt) setReceipt({ ...destination.receipt, path,
+      ...(back && { returnFrom: pathname }) });
+    if (back) router.back();
+    else if (pathname === path) return;
+    else if (appTabs(lang).some(({ route }) => pathname === '/' + route)) router.push(financeHref(destination.page));
+    else router.replace(financeHref(destination.page));
+  }, [destination, command.busy]);
 
-  function submitTransaction(fields: TransactionFields) {
-    if (page.name === 'revise') {
-      void command.submit({ kind: 'transaction.revise', transactionId: page.origin.transactionId,
-        body: { ...fields, expectedTransactionVersion: page.version } });
-    } else if (fields.type === 'transfer') {
-      void command.submit({ kind: 'transfer.record', body: fields });
-    } else {
-      const { type, ...body } = fields;
-      void command.submit({ kind: type === 'expense' ? 'expense.record' : 'income.record', body });
-    }
-  }
+  useEffect(() => {
+    if (!command.reading) command.clearError();
+    setAccountNotice((notice) => notice && pathname.startsWith('/accounts/' + encodeURIComponent(notice.accountId) + '/')
+      ? notice : undefined);
+    setReceipt((previous) => {
+      if (!previous) return null;
+      if (previous.returnFrom && pathname !== previous.returnFrom) {
+        const { returnFrom: _origin, ...receipt } = previous;
+        return { ...receipt, path: pathname };
+      }
+      return previous.path === pathname || previous.returnFrom === pathname ? previous : null;
+    });
+  }, [pathname]);
 
   useEffect(() => {
     void loadAccounts();
     void loadCategories();
   }, []);
 
-  useEffect(() => {
-    if (!visible || page.name === 'products') return;
-    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
-      back();
-      return true;
-    });
-    return () => subscription.remove();
-  }, [page, visible, command.busy]);
+  const blocked = command.busy || command.reading || command.pending !== null;
+  return { access, lang, blocked, accounts, categories, activeAccounts, archivedAccounts, listError, categoryError, refreshing,
+    receipt: receipt?.path === pathname ? receipt : undefined, setReceipt, revision, command,
+    accountNotice, setAccountNotice, loadAccounts, loadCategories, updateAccount, invalidate, go,
+    openNewAccount: () => go({ name: 'addAccount' }),
+  };
+}
 
-  function refresh() {
-    if (scheduleSaving.current) return;
-    void loadAccounts();
-    if (!categories) void loadCategories();
-    if (historyId) void loadHistory(historyId);
-    if (page.name === 'transaction') void loadTransaction(page.transactionId);
-    if (page.name === 'schedule') setScheduleRefresh((signal) => signal + 1);
-    if (page.name === 'statistics') statistics.refresh();
+const FinanceContext = createContext<ReturnType<typeof useWorkspaceModel> | null>(null);
+
+export function FinanceWorkspace({ access, lang, children }: { access: FinanceAccess; lang: Language; children: ReactNode }) {
+  const model = useWorkspaceModel(access, lang);
+  return <FinanceContext value={model}>{children}</FinanceContext>;
+}
+
+export function useFinanceWorkspace() {
+  const workspace = use(FinanceContext);
+  if (!workspace) throw new Error('FinanceWorkspace is missing');
+  return workspace;
+}
+
+export function FinanceTabScreen({ tab }: { tab: Exclude<FinanceTab, 'settings'> }) {
+  return <FinanceScreen page={{ name: tab }} />;
+}
+
+export function FinanceRouteScreen({ route }: { route: FinanceRoute }) {
+  const params = useLocalSearchParams();
+  const page = financePage(route, params);
+  return page ? <FinanceScreen page={page} inStack /> : <Redirect href="/accounts" />;
+}
+
+function useFinanceRead<T>(key: string | undefined, revision: number, access: FinanceAccess,
+  read: (key: string, before?: string) => Promise<T>) {
+  const [state, setState] = useState<{ key: string; data?: T; error?: string; busy: boolean }>();
+  const latest = useRef(0);
+  const visible = state?.key === key ? state : undefined;
+
+  async function load(before?: string, append?: (previous: T, next: T) => T) {
+    if (!key || !access.isCurrent()) return;
+    const attempt = ++latest.current;
+    const current = () => attempt === latest.current && access.isCurrent();
+    setState({ key, data: visible?.data, busy: true });
+    try {
+      const data = await read(key, before);
+      if (current()) setState({ key, data: append && visible?.data ? append(visible.data, data) : data, busy: false });
+    } catch (error) {
+      if (!current()) return;
+      const code = apiErrorCode(error);
+      if (!access.onAccessFailure(code)) setState({ key, data: visible?.data, error: code, busy: false });
+    }
   }
 
-  const blocked = command.busy || command.reading || command.pending !== null;
+  useEffect(() => {
+    void load();
+    return () => { latest.current += 1; };
+  }, [key, revision]);
+
+  return { data: visible?.data, error: visible?.error, busy: !!key && (visible?.busy ?? true), load };
+}
+
+function FinanceScreen({ page, inStack = false }: { page: Page; inStack?: boolean }) {
+  const { timeZoneSuggestion } = useAccessSession();
+  const { access, lang, blocked, accounts, categories, activeAccounts, archivedAccounts, listError, categoryError,
+    refreshing, receipt, setReceipt, revision, command, accountNotice, setAccountNotice,
+    loadAccounts, loadCategories, updateAccount, invalidate, go,
+  } = useFinanceWorkspace();
+  const router = useRouter();
+  const [localWrite, setLocalWrite] = useState(false);
+  const [afterSave, setAfterSave] = useState<{ page: FinancePage; replace?: boolean }>();
+  const [scheduleRefresh, setScheduleRefresh] = useState(0);
+  const [paymentsRefresh, setPaymentsRefresh] = useState(0);
+  const t = financeCopy[lang];
+  const s = scheduleCopy[lang];
+  const { width, fontScale } = useWindowDimensions();
+  const focused = useIsFocused();
+  const wasFocused = useRef(false);
+  if (focused) wasFocused.current = true;
+  const statistics = useStatistics(access, page.name === 'statistics' && wasFocused.current, revision);
+  const scroll = useRef<ComponentRef<typeof ScrollView>>(null);
+  const accountId = 'accountId' in page ? page.accountId : null;
+  const account = accountId ? accounts?.find((entry) => entry.accountId === accountId) : undefined;
+  const historyId = page.name === 'history' ? page.accountId : undefined;
+  const transactionId = 'transactionId' in page ? page.transactionId : undefined;
+  const history = useFinanceRead(historyId, revision, access, (accountId, before) =>
+    request('listAccountHistory', { token: access.token, params: { accountId },
+      query: before ? new URLSearchParams({ before }) : undefined }));
+  const transaction = useFinanceRead(transactionId, revision, access, (transactionId) =>
+    request('listTransactionVersions', { token: access.token, params: { transactionId } }));
   const showingSupport = page.name === 'support';
-  const onMainPage = showingSupport || page.name === 'products' || page.name === 'payments' || page.name === 'statistics';
+  const financeTab = page.name === 'products' || page.name === 'payments' || page.name === 'statistics';
   const balanceByCurrency = new Map<Currency, bigint>();
   for (const entry of activeAccounts) {
     balanceByCurrency.set(entry.currency, (balanceByCurrency.get(entry.currency) ?? 0n) + BigInt(entry.balanceMinor));
   }
+  const totals = currencies.map((currency) => ({
+    currency, amount: formatAmount(String(balanceByCurrency.get(currency) ?? 0n), lang),
+  }));
+  const useBalanceRows = Math.min(width, 540) / fontScale < 355 || totals.some(({ amount }) => amount.length > 11);
   const historyTitles = {
     opening: t.opening, adjustment: t.adjustment, expense: t.expenseEntry, income: t.incomeEntry, transfer: t.transfer,
   };
@@ -311,19 +306,20 @@ export function FinanceScreen({ access, lang, visible, timeZoneSuggestion }: {
     'account.reconcile': t.reconciled,
     'schedule.skip': s.dateSkipped, 'schedule.replace': s.ruleReplaced,
   };
-  const activeTransaction = page.name === 'transaction' && transaction?.transactionId === page.transactionId ? transaction : undefined;
+  const activeTransaction = transaction.data;
   const currentVersion = activeTransaction?.versions.find(({ version }) => version === activeTransaction.transactionVersion);
   const initialRevision = activeTransaction && currentVersion && revisionFields(activeTransaction.type, currentVersion);
   const archivedTransaction = currentVersion?.movements.some(({ accountId }) => accounts?.find((item) => item.accountId === accountId)?.archived);
-  const transactionChanged = command.error === 'VERSION_CONFLICT' || command.error === 'TRANSACTION_VOID';
-  const transactionPage = page.name === 'revise' ? page.origin : page.name === 'transaction' ? page : undefined;
-  const formKind = page.name === 'record' ? page.kind : page.name === 'revise' ? page.initial.type : undefined;
+  const transactionChanged = command.error === 'VERSION_CONFLICT' || command.error === 'TRANSACTION_VOID' ||
+    (page.name === 'revise' && page.version !== undefined && !!activeTransaction && page.version !== activeTransaction.transactionVersion);
+  const formKind = page.name === 'record' ? page.kind : page.name === 'revise' ? initialRevision?.type : undefined;
   const receiptResult = receipt?.result;
   const receiptAccounts = receiptResult && ('fromAccount' in receiptResult ? [receiptResult.fromAccount, receiptResult.toAccount]
     : 'accounts' in receiptResult ? receiptResult.accounts : 'balanceMinor' in receiptResult ? [receiptResult] : []);
-  const activeHistory = history?.accountId === historyId ? history : undefined;
+  const activeHistory = history.data;
   const adjustment = receiptResult && 'adjustmentId' in receiptResult ? receiptResult : undefined;
   const reconciling = page.name === 'reconcile';
+  const detailDepositTerms = account ? depositTerms(account, lang) : '';
 
   useEffect(() => {
     if (!reconciling) return;
@@ -331,33 +327,87 @@ export function FinanceScreen({ access, lang, visible, timeZoneSuggestion }: {
     if (command.error === 'ACCOUNT_UNAVAILABLE') void loadAccounts();
   }, [reconciling, command.error]);
 
-  return <View style={[layout.container, !visible && layout.hidden]}>
+  const writing = inStack && (localWrite || (focused && command.busy));
+  usePreventRemove(writing);
+
+  function returnTo(previous: FinancePage) {
+    Keyboard.dismiss();
+    if (router.canDismiss()) router.back();
+    else router.replace(financeHref(previous));
+  }
+
+  useEffect(() => {
+    if (!afterSave || writing || !focused) return;
+    setAfterSave(undefined);
+    if (afterSave.replace) router.replace(financeHref(afterSave.page));
+    else returnTo(afterSave.page);
+  }, [afterSave, writing, focused]);
+
+  function openRecord(kind: TransactionFields['type'], accountId: string | null) {
+    go({ name: 'record', kind, accountId });
+  }
+
+  function submitTransaction(fields: TransactionFields) {
+    if (page.name === 'revise') {
+      if (!activeTransaction || transactionChanged) return;
+      void command.submit({ kind: 'transaction.revise', transactionId: page.transactionId,
+        body: { ...fields, expectedTransactionVersion: page.version ?? activeTransaction.transactionVersion } });
+    } else if (fields.type === 'transfer') {
+      void command.submit({ kind: 'transfer.record', body: fields });
+    } else {
+      const { type, ...body } = fields;
+      void command.submit({ kind: type === 'expense' ? 'expense.record' : 'income.record', body });
+    }
+  }
+
+  function refresh() {
+    if (writing) return;
+    void loadAccounts();
+    if (!categories) void loadCategories();
+    if (historyId) void history.load();
+    if (transactionId) void transaction.load();
+    if (page.name === 'schedule') setScheduleRefresh((signal) => signal + 1);
+    if (page.name === 'payments') setPaymentsRefresh((signal) => signal + 1);
+    if (page.name === 'statistics') statistics.refresh();
+  }
+
+  function screenTitle() {
+    switch (page.name) {
+      case 'archive': return t.archived;
+      case 'addAccount': return t.addAccount;
+      case 'manage': return t.manageAccount;
+      case 'reconcile': return t.reconcileAccount;
+      case 'history': return account?.name ?? t.history;
+      case 'accountEditor': {
+        const { editor } = page;
+        if (editor.kind === 'card') return editor.cardId ? t.editCard : t.addCard;
+        return editor.kind === 'rename' ? t.renameAccount : t.changeStartDate;
+      }
+      case 'record': return transactionLabels[page.kind];
+      case 'revise': return t.editTransaction;
+      case 'transaction': return activeTransaction ? historyTitles[activeTransaction.type] : t.transactionVersions;
+      case 'schedule': {
+        if (page.editor) return { create: s.newRule, edit: s.edit, replace: s.replacing }[page.editor];
+        if (page.skipDate) return s.skip;
+        return page.ruleId ? s.rule : s.schedule;
+      }
+      default: return '';
+    }
+  }
+
+  return <SafeAreaView style={layout.container} edges={inStack ? ['left', 'right', 'bottom'] : ['left', 'right']}>
+    {inStack && <Stack.Screen options={{ title: screenTitle(), gestureEnabled: !writing }} />}
     <ScrollView ref={scroll} key={page.name + (historyId ?? '')} automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
-      keyboardDismissMode="on-drag" keyboardShouldPersistTaps="handled" contentContainerStyle={layout.page}
-      refreshControl={(onMainPage && !showingSupport) || page.name === 'history' || page.name === 'transaction' ||
+      contentInsetAdjustmentBehavior={inStack ? 'never' : 'automatic'}
+      keyboardDismissMode="on-drag" keyboardShouldPersistTaps="handled" contentContainerStyle={styles.page}
+      refreshControl={financeTab || page.name === 'archive' || page.name === 'history' || page.name === 'transaction' ||
         (page.name === 'schedule' && !page.editor && !page.skipDate)
-        ? <RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={palette.mint} colors={[palette.mint]} />
+        ? <RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={palette.accent} colors={[palette.accent]} />
         : undefined}>
-      {!onMainPage && <View style={layout.leading}>
-        <FinanceButton title={t.back} onPress={back} disabled={page.name === 'schedule' && (scheduleBusy || command.busy)}
-          testID="finance-back" />
-      </View>}
-      {page.name === 'products' && <Text accessibilityRole="header" testID="finance-products" style={styles.heading}>{t.products}</Text>}
-      {page.name === 'statistics' && <Text accessibilityRole="header" testID="finance-statistics" style={styles.heading}>{reportCopy.title}</Text>}
-      {page.name === 'payments' && <Text accessibilityRole="header" testID="finance-payments" style={styles.heading}>{s.payments}</Text>}
-      {page.name === 'addAccount' && <Text accessibilityRole="header" style={styles.heading}>{t.addAccount}</Text>}
-      {page.name === 'manage' && <Text accessibilityRole="header" style={styles.heading}>{t.manageAccount}</Text>}
-      {reconciling && <Text accessibilityRole="header" style={styles.heading}>{t.reconcileAccount}</Text>}
-      {page.name === 'record' && <Text accessibilityRole="header" style={styles.heading}>{transactionLabels[page.kind]}</Text>}
-      {page.name === 'revise' && <Text accessibilityRole="header" style={styles.heading}>{t.editTransaction}</Text>}
-      {page.name === 'transaction' && <Text accessibilityRole="header" style={styles.heading}>
-        {activeTransaction ? historyTitles[activeTransaction.type] : t.transactionVersions}
-      </Text>}
       {page.name === 'history' && account && <View style={layout.detailHeader}>
-        <Text accessibilityRole="header" style={styles.heading}>{account.name}</Text>
         <Text style={styles.heroValue} testID="finance-detail-balance">{formatMoney(account.balanceMinor, account.currency, lang)}</Text>
         <Text style={styles.meta}>{formatFinancialDate(account.startDate, lang)} · {accountType(account, lang)}</Text>
-        {'type' in account && account.type === 'deposit' && <Text style={styles.meta}>{depositTerms(account, lang)}</Text>}
+        {!!detailDepositTerms && <Text style={styles.meta}>{detailDepositTerms}</Text>}
         {account.needsReconciliation && <FinanceAlert>{t.needsReconciliation}</FinanceAlert>}
         <View style={layout.actions}>
           {!account.archived && <>
@@ -368,16 +418,14 @@ export function FinanceScreen({ access, lang, visible, timeZoneSuggestion }: {
             {activeAccounts.length > 1 && <FinanceButton title={t.newTransfer} onPress={() => openRecord('transfer', account.accountId)}
               disabled={blocked} testID="finance-transfer" />}
           </>}
-          <FinanceButton title={t.manageAccount} onPress={() => {
-            command.clearError();
-            go({ name: 'manage', accountId: account.accountId });
-          }} testID="finance-manage-account" />
+          <FinanceButton title={t.manageAccount} onPress={() => go({ name: 'manage', accountId: account.accountId })}
+            testID="finance-manage-account" />
           <FinanceButton title={s.schedule} onPress={() => go({ name: 'schedule', accountId: account.accountId })}
             testID="finance-account-schedule" />
         </View>
       </View>}
 
-      {showingSupport && visible && <SupportScreen lang={lang} />}
+      {showingSupport && focused && <SupportScreen lang={lang} showHeading={false} />}
       {!showingSupport && <>
       {command.reading && <View style={layout.panel}>
         {command.error ? <>
@@ -408,13 +456,14 @@ export function FinanceScreen({ access, lang, visible, timeZoneSuggestion }: {
       {!command.reading && command.error !== '' &&
         <FinanceAlert testID="finance-command-message">{localizedError(command.error, lang,
           page.name === 'schedule' ? page.editor === 'replace' ? 'replace' : 'schedule' : reconciling ? 'reconcile' : undefined)}</FinanceAlert>}
-      {transactionPage && transactionChanged && <FinanceButton title={t.reloadTransaction}
+      {transactionId && transactionChanged && <FinanceButton title={t.reloadTransaction}
         onPress={() => {
           command.clearError();
           void loadAccounts();
-          go(transactionPage);
+          if (page.name === 'revise') router.dismissTo(financeHref({ name: 'transaction', transactionId }));
+          else void transaction.load();
         }} disabled={blocked} testID="finance-reload-transaction" />}
-      {receipt && <View style={layout.panel} testID="finance-receipt" accessibilityLiveRegion="polite">
+      {focused && receipt && <View style={layout.panel} testID="finance-receipt" accessibilityLiveRegion="polite">
         <Text style={styles.title}>{receiptLabels[receipt.command]}</Text>
         {receiptResult && 'occurrenceId' in receiptResult && <>
           <Text style={styles.label}>{formatFinancialDate(receiptResult.date, lang)}</Text>
@@ -456,46 +505,46 @@ export function FinanceScreen({ access, lang, visible, timeZoneSuggestion }: {
         <FinanceButton title={t.dismiss} onPress={() => setReceipt(null)} />
       </View>}
 
-      {(onMainPage || page.name === 'schedule' || page.name === 'history' || page.name === 'transaction' || reconciling || !!formKind) && listError !== '' && <>
+      {(financeTab || page.name === 'archive' || page.name === 'schedule' || page.name === 'history' ||
+        page.name === 'transaction' || reconciling || !!formKind) && listError !== '' && <>
         <FinanceAlert>{localizedError(listError, lang, reconciling ? 'reconcile' : undefined)}</FinanceAlert>
         <FinanceButton title={copy[lang].retry} onPress={() => void loadAccounts()} />
       </>}
-      {!accounts && refreshing && <ActivityIndicator color={palette.mint} accessibilityLabel={t.loading} />}
+      {!accounts && refreshing && <ActivityIndicator color={palette.accent} accessibilityLabel={t.loading} />}
       </>}
       {page.name === 'products' && <>
         {timeZoneSuggestion}
-        {accounts && <View style={layout.summary}>
-          <Text accessibilityRole="header" style={styles.section}>{t.balances}</Text>
-          {currencies.map((currency) => <View key={currency} style={layout.currencyRow}>
-            <Text style={styles.meta}>{currency}</Text>
-            <Text style={styles.value}>{formatMoney(String(balanceByCurrency.get(currency) ?? 0n), currency, lang)}</Text>
-          </View>)}
-        </View>}
-        <View style={layout.actions}>
-          <FinanceButton title={t.addAccount} onPress={() => { command.clearError(); go({ name: 'addAccount' }); }}
-            disabled={blocked} primary testID="finance-add-account" />
-          {activeAccounts.length > 0 && <>
-            <FinanceButton title={t.expense} disabled={blocked} onPress={() => openRecord('expense', null)} testID="finance-expense" />
-            <FinanceButton title={t.income} disabled={blocked} onPress={() => openRecord('income', null)} testID="finance-income" />
-          </>}
-          {activeAccounts.length > 1 && <FinanceButton title={t.newTransfer} disabled={blocked}
-            onPress={() => openRecord('transfer', null)} testID="finance-transfer" />}
-        </View>
-        {accounts && <View style={layout.section}>
-          <Text accessibilityRole="header" style={styles.section}>{t.accounts}</Text>
-          {activeAccounts.length ? <View style={layout.rows}>
-            {activeAccounts.map((entry) => <AccountRow key={entry.accountId} account={entry} lang={lang}
-              open={() => go({ name: 'history', accountId: entry.accountId })} />)}
-          </View> : <Text style={styles.meta}>{t.noAccounts}</Text>}
-        </View>}
-        {archivedAccounts.length > 0 && <View style={layout.section}>
-          <Text accessibilityRole="header" style={styles.section}>{t.archived}</Text>
-          <View style={layout.rows}>
-            {archivedAccounts.map((entry) => <AccountRow key={entry.accountId} account={entry} lang={lang}
-              open={() => go({ name: 'history', accountId: entry.accountId })} />)}
+        {accounts && <View style={[styles.surface, layout.summary]}>
+          <Text accessibilityRole="header" style={styles.groupTitle}>{t.balances}</Text>
+          <View style={!useBalanceRows && layout.currencyStrip}>
+            {totals.map(({ currency, amount }, index) => <View key={currency}
+              style={useBalanceRows ? layout.currencyRow : [layout.currencyCell, index > 0 && layout.currencyDivider]}>
+              <Text style={layout.currencyCode}>{currency}</Text>
+              <Text style={layout.currencyValue}>{amount}</Text>
+            </View>)}
           </View>
         </View>}
+        {accounts && <View style={layout.section}>
+          <Text accessibilityRole="header" style={styles.groupTitle}>{t.myAccounts}</Text>
+          {activeAccounts.length ? <View style={styles.surface}>
+            {activeAccounts.map((entry, index) => <AccountRow key={entry.accountId} account={entry} lang={lang}
+              divider={index > 0}
+              open={() => go({ name: 'history', accountId: entry.accountId })} />)}
+          </View> : <Text style={styles.meta}>{t.noAccounts}</Text>}
+          {archivedAccounts.length > 0 && <Pressable accessibilityRole="button" onPress={() => go({ name: 'archive' })}
+            style={({ pressed }) => [layout.archiveLink, pressed && layout.pressed]} testID="finance-archive">
+            <FinanceIcon name="archive" color={palette.muted} size={16} />
+            <Text style={styles.meta}>{t.archived}</Text>
+          </Pressable>}
+        </View>}
       </>}
+      {page.name === 'archive' && accounts && (archivedAccounts.length > 0
+        ? <View style={styles.surface}>
+            {archivedAccounts.map((entry, index) => <AccountRow key={entry.accountId} account={entry} lang={lang}
+              divider={index > 0}
+              open={() => go({ name: 'history', accountId: entry.accountId })} />)}
+          </View>
+        : <Text style={styles.meta}>{t.noArchived}</Text>)}
       {page.name === 'statistics' && <>
         {categoryError && <View style={layout.section}>
           <FinanceAlert>{localizedError(categoryError, lang)}</FinanceAlert>
@@ -503,71 +552,91 @@ export function FinanceScreen({ access, lang, visible, timeZoneSuggestion }: {
         </View>}
         <StatisticsScreen statistics={statistics} accounts={accounts} categories={categories} lang={lang}
           today={access.profile.today} scrollToTop={() => scroll.current?.scrollTo({ y: 0, animated: false })}
-          onTransaction={({ transactionId, accountId }) => {
-            command.clearError();
-            go({ name: 'transaction', transactionId, accountId, fromStatistics: true });
-          }} />
+          onTransaction={({ transactionId }) => go({ name: 'transaction', transactionId })} />
       </>}
-      {page.name === 'payments' && <View style={layout.section}>
-        <View style={layout.actions}>
-          <FinanceButton title={t.expense} disabled={blocked || !activeAccounts.length} onPress={() => openRecord('expense', null)}
-            primary testID="finance-expense" />
-          <FinanceButton title={t.income} disabled={blocked || !activeAccounts.length} onPress={() => openRecord('income', null)}
-            testID="finance-income" />
-          <FinanceButton title={t.newTransfer} disabled={blocked || activeAccounts.length < 2} onPress={() => openRecord('transfer', null)}
-            testID="finance-transfer" />
-        </View>
-        <FinanceButton title={s.schedule} onPress={() => go({ name: 'schedule', accountId: null })} testID="finance-payments-schedule" />
-      </View>}
+      {page.name === 'payments' && <PaymentsScreen access={access} lang={lang} accountCount={activeAccounts.length}
+        categories={categories} blocked={blocked} focused={focused} refreshSignal={paymentsRefresh}
+        onRecord={(kind) => openRecord(kind, null)}
+        onSchedule={(ruleId) => go({ name: 'schedule', accountId: null, ruleId })} />}
       {page.name === 'schedule' && <>
         {categoryError && <View style={layout.section}>
           <FinanceAlert>{localizedError(categoryError, lang)}</FinanceAlert>
           <FinanceButton title={copy[lang].retry} onPress={() => void loadCategories()} />
         </View>}
         <ScheduleScreen page={page} access={access} accounts={accounts} categories={categories} lang={lang}
-          disabled={blocked || refreshing} visible={visible} refreshSignal={scheduleRefresh} commandError={command.error}
-          onSubmit={command.submit} onPage={go} onSaving={(saving) => {
-            scheduleSaving.current = saving;
-            setScheduleBusy(saving);
-          }} onTransaction={({ transactionId, accountId }) => {
-            if (transactionId) go({ name: 'transaction', transactionId, accountId, scheduleOrigin: page });
+          disabled={blocked || refreshing} visible={focused} refreshSignal={scheduleRefresh + revision} commandError={command.error}
+          onSubmit={command.submit} onPage={(next) => {
+            if (financePath(next) !== financePath(page)) go(next);
+            else router.setParams({ offset: next.offset ?? 0, section: next.section ?? 'dates' });
+          }} onSaving={setLocalWrite}
+          onCancel={() => returnTo({ name: 'schedule', accountId: page.accountId })}
+          onSaved={(next, created) => {
+            invalidate();
+            setAfterSave({ page: next, replace: created });
+          }}
+          onTransaction={({ transactionId }) => {
+            if (transactionId) go({ name: 'transaction', transactionId });
           }} />
       </>}
       {page.name === 'addAccount' && <AccountForm lang={lang} today={access.profile.today} disabled={blocked} onSubmit={command.submit} />}
-      {page.name === 'manage' && account && <AccountManagement account={account} access={access} lang={lang}
-        disabled={blocked} onAccountChanged={updateAccount}
+      {(page.name === 'manage' || page.name === 'accountEditor') && account && <AccountManagement
+        key={account.accountId} account={account} access={access} lang={lang} disabled={blocked}
+        editor={page.name === 'accountEditor' ? page.editor : undefined} onAccountChanged={updateAccount}
+        notice={page.name === 'manage' && accountNotice?.accountId === account.accountId ? accountNotice.key : undefined}
+        onBusy={setLocalWrite}
+        onEdit={(editor) => {
+          setAccountNotice(undefined);
+          go({ name: 'accountEditor', accountId: account.accountId, editor });
+        }}
+        onFinish={(key) => {
+          const management: FinancePage = { name: 'manage', accountId: account.accountId };
+          if (!key) returnTo(management);
+          else {
+            setAccountNotice({ accountId: account.accountId, key });
+            invalidate();
+            setAfterSave({ page: management });
+          }
+        }}
         onReconcile={() => go({ name: 'reconcile', accountId: account.accountId })} />}
       {reconciling && account && (account.archived ? <FinanceAlert>{t.unavailable}</FinanceAlert>
         : <ReconciliationForm key={account.accountId} account={account} categories={categories} access={access}
-          lang={lang} visible={visible} disabled={blocked || command.error === 'ACCOUNT_UNAVAILABLE'}
+          lang={lang} visible={focused} disabled={blocked || command.error === 'ACCOUNT_UNAVAILABLE'}
           commandError={command.error}
           onSubmit={(body) => void command.submit({ kind: 'account.reconcile', accountId: account.accountId, body })} />)}
+      {transactionId && <>
+        {transaction.busy && <ActivityIndicator color={palette.accent} accessibilityLabel={t.loading} />}
+        {transaction.error && <>
+          <FinanceAlert>{localizedError(transaction.error, lang)}</FinanceAlert>
+          <FinanceButton title={copy[lang].retry} onPress={() => void transaction.load()} />
+        </>}
+      </>}
+      {page.name === 'revise' && activeTransaction && (!initialRevision || archivedTransaction) &&
+        <FinanceAlert>{t.unavailable}</FinanceAlert>}
+      {page.name === 'revise' && transactionChanged && command.error === '' &&
+        <FinanceAlert>{t.versionConflict}</FinanceAlert>}
+      {accountId && (page.name === 'history' || page.name === 'manage' || page.name === 'reconcile' || page.name === 'accountEditor') &&
+        accounts && !account && !listError && <FinanceAlert>{t.unavailable}</FinanceAlert>}
       {formKind && <>
         {formKind !== 'transfer' && categoryError && <>
           <FinanceAlert>{localizedError(categoryError, lang)}</FinanceAlert>
           <FinanceButton title={copy[lang].retry} onPress={() => void loadCategories()} />
         </>}
         {formKind !== 'transfer' && !categories && !categoryError &&
-          <ActivityIndicator color={palette.mint} accessibilityLabel={t.loading} />}
-        {accounts && (categories || formKind === 'transfer') && <TransactionForm lang={lang} today={access.profile.today}
-          disabled={blocked || transactionChanged} onSubmit={submitTransaction} accounts={activeAccounts}
+          <ActivityIndicator color={palette.accent} accessibilityLabel={t.loading} />}
+        {accounts && (categories || formKind === 'transfer') && !archivedTransaction && <TransactionForm
+          key={page.name === 'revise' ? transactionId : formKind} lang={lang} today={access.profile.today}
+          disabled={blocked || transactionChanged || transaction.busy || !!transaction.error} onSubmit={submitTransaction} accounts={activeAccounts}
           categories={categories ?? []} selectedAccountId={page.name === 'record' ? page.accountId : null}
-          kind={formKind} initial={page.name === 'revise' ? page.initial : undefined} />}
+          kind={formKind} initial={page.name === 'revise' ? initialRevision : undefined} />}
       </>}
       {page.name === 'transaction' && <>
-        {transactionBusy && <ActivityIndicator color={palette.mint} accessibilityLabel={t.loading} />}
-        {transactionError && <>
-          <FinanceAlert>{localizedError(transactionError, lang)}</FinanceAlert>
-          <FinanceButton title={copy[lang].retry} onPress={() => void loadTransaction(page.transactionId)} />
-        </>}
         {activeTransaction && <>
           {archivedTransaction && currentVersion?.status === 'posted' && <Text style={styles.meta}>{t.archivedTransaction}</Text>}
           {accounts && initialRevision && !archivedTransaction && <View style={layout.actions}>
-            <FinanceButton title={t.editTransaction} onPress={() => go({ name: 'revise', origin: page,
-              initial: initialRevision, version: activeTransaction.transactionVersion })}
-              disabled={blocked || transactionBusy || transactionChanged} testID="finance-edit-transaction" />
+            <FinanceButton title={t.editTransaction} onPress={() => go({ name: 'revise', transactionId: page.transactionId, version: activeTransaction.transactionVersion })}
+              disabled={blocked || transaction.busy || transactionChanged} testID="finance-edit-transaction" />
             <FinanceButton title={t.voidTransaction} testID="finance-void-transaction"
-              disabled={blocked || transactionBusy || transactionChanged}
+              disabled={blocked || transaction.busy || transactionChanged}
               onPress={() => Alert.alert(t.voidTitle, t.voidExplanation, [
                 { text: copy[lang].cancel, style: 'cancel' },
                 { text: t.voidTransaction, style: 'destructive', onPress: () => void command.submit({
@@ -581,10 +650,10 @@ export function FinanceScreen({ access, lang, visible, timeZoneSuggestion }: {
       </>}
       {page.name === 'history' && <View style={layout.section}>
         <Text accessibilityRole="header" style={styles.section} testID="finance-history">{t.history}</Text>
-        {historyBusy && <ActivityIndicator color={palette.mint} accessibilityLabel={t.loading} />}
-        {historyError && <>
-          <FinanceAlert>{localizedError(historyError, lang)}</FinanceAlert>
-          <FinanceButton title={copy[lang].retry} onPress={() => void loadHistory(page.accountId)} />
+        {history.busy && <ActivityIndicator color={palette.accent} accessibilityLabel={t.loading} />}
+        {history.error && <>
+          <FinanceAlert>{localizedError(history.error, lang)}</FinanceAlert>
+          <FinanceButton title={copy[lang].retry} onPress={() => void history.load()} />
         </>}
         {activeHistory && !activeHistory.entries.length && <Text style={styles.meta}>{t.noHistory}</Text>}
         {activeHistory && activeHistory.entries.length > 0 && <View style={layout.rows}>
@@ -609,88 +678,82 @@ export function FinanceScreen({ access, lang, visible, timeZoneSuggestion }: {
               {(index === 0 || activeHistory.entries[index - 1].date !== entry.date) &&
                 <Text style={layout.dateLabel}>{formatFinancialDate(entry.date, lang)}</Text>}
               {'status' in entry ? <Pressable accessibilityRole="button" testID={'finance-transaction-' + entry.id}
-                onPress={() => {
-                  command.clearError();
-                  go({ name: 'transaction', transactionId: entry.id, accountId: activeHistory.accountId });
-                }} style={({ pressed }) => [layout.historyRow, pressed && layout.pressed]}>{row}</Pressable>
+                onPress={() => go({ name: 'transaction', transactionId: entry.id })}
+                style={({ pressed }) => [layout.historyRow, pressed && layout.pressed]}>{row}</Pressable>
                 : <View style={layout.historyRow}>{row}</View>}
             </View>;
           })}
         </View>}
-        {activeHistory?.next && <FinanceButton title={t.loadMore} disabled={historyBusy} onPress={() => {
-          if (activeHistory.next) void loadHistory(page.accountId, activeHistory.next);
+        {activeHistory?.next && <FinanceButton title={t.loadMore} disabled={history.busy} onPress={() => {
+          if (activeHistory.next) void history.load(activeHistory.next,
+            (previous, next) => ({ ...next, entries: [...previous.entries, ...next.entries] }));
         }} />}
       </View>}
     </ScrollView>
-    {onMainPage && <View style={layout.tabBar}>
-      {([{ page: products, label: t.products }, { page: statisticsPage, label: reportCopy.title },
-        { page: payments, label: s.payments }, { page: supportPage, label: copy[lang].support }] as const).map((tab) => (
-        <Pressable key={tab.page.name} accessibilityRole="tab" accessibilityLabel={tab.label}
-          accessibilityState={{ selected: page.name === tab.page.name }} onPress={() => go(tab.page)}
-          testID={'finance-tab-' + tab.page.name} style={[layout.tab, wrapTabs && layout.wideTab]}>
-          <Text maxFontSizeMultiplier={1.35} style={[layout.tabLabel, page.name === tab.page.name && layout.tabActive]}>
-            {tab.page.name === 'payments' && !wrapTabs ? tab.label.replace(/\s*\/\s*/, '/\n') : tab.label}
-          </Text>
-        </Pressable>
-      ))}
-    </View>}
-    {visible && Platform.OS === 'ios' && (page.name === 'addAccount' || page.name === 'manage' || page.name === 'statistics' || reconciling || !!formKind ||
+    {focused && Platform.OS === 'ios' && (page.name === 'addAccount' || page.name === 'accountEditor' || reconciling || !!formKind ||
       (page.name === 'schedule' && (!!page.editor || !!page.skipDate))) &&
       <InputAccessoryView nativeID="finance-keyboard" backgroundColor={palette.ground}>
         <View style={layout.keyboardBar}>
           <FinanceButton title={t.done} onPress={Keyboard.dismiss} testID="finance-keyboard-done" />
         </View>
       </InputAccessoryView>}
-  </View>;
+  </SafeAreaView>;
 }
 
 function accountType(account: Account, lang: Language) {
   return financeCopy[lang]['type' in account ? account.type : 'regular'];
 }
 
-function depositTerms(account: Extract<Account, { type: 'deposit' }>, lang: Language) {
+function depositTerms(account: Account, lang: Language) {
+  if (!('type' in account) || account.type !== 'deposit') return '';
   const rate = formatRate(account.annualRatePercent, lang);
   return rate + '% · ' + formatFinancialDate(account.maturityDate, lang);
 }
 
-function AccountRow({ account, lang, open }: { account: Account; lang: Language; open: () => void }) {
+function AccountRow({ account, lang, divider, open }: { account: Account; lang: Language; divider: boolean; open: () => void }) {
+  const type = 'type' in account ? account.type : 'regular';
+  const terms = depositTerms(account, lang);
   return <Pressable accessibilityRole="button" testID={'finance-account-' + account.accountId}
-    onPress={open} style={({ pressed }) => [layout.accountRow, pressed && layout.pressed]}>
-    <View style={layout.identity}>
-      <Text style={styles.title}>{account.name}</Text>
-      <Text style={styles.meta}>{accountType(account, lang)}</Text>
-      {'type' in account && account.type === 'deposit' && <Text style={styles.meta}>{depositTerms(account, lang)}</Text>}
-      {account.needsReconciliation && <Text style={styles.meta}>{financeCopy[lang].needsReconciliation}</Text>}
+    onPress={open} style={({ pressed }) => [layout.accountRow, divider && layout.rowDivider, pressed && layout.pressed]}>
+    <View style={layout.accountIdentity}>
+      <FinanceIcon name={type === 'regular' ? 'card' : type} color={palette.muted} />
+      <View style={layout.accountLabels}>
+        <Text style={styles.title}>{account.name}</Text>
+        <Text style={styles.meta}>{accountType(account, lang)}
+          {terms ? ' · ' + terms : ''}</Text>
+        {account.needsReconciliation && <Text style={styles.meta}>{financeCopy[lang].needsReconciliation}</Text>}
+      </View>
     </View>
-    <Text style={layout.accountValue}>{formatMoney(account.balanceMinor, account.currency, lang)}</Text>
+    <Text style={layout.accountValue}>{formatAmount(account.balanceMinor, lang)} <Text style={layout.currencyCode}>{account.currency}</Text></Text>
   </Pressable>;
 }
 
 const layout = StyleSheet.create({
-  container: { flex: 1 },
-  hidden: { display: 'none' },
-  page: { width: '100%', maxWidth: 540, alignSelf: 'center', paddingHorizontal: 20, paddingTop: 12, paddingBottom: 28, gap: 18 },
-  summary: { backgroundColor: palette.panel, padding: 16, borderRadius: 16, gap: 6 },
-  currencyRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'baseline', gap: 10 },
-  leading: { alignItems: 'flex-start' },
+  container: { flex: 1, backgroundColor: palette.ground },
+  summary: { padding: 12, gap: 12 },
+  currencyStrip: { flexDirection: 'row' },
+  currencyCell: { flex: 1, paddingHorizontal: 6, gap: 3 },
+  currencyDivider: { borderLeftWidth: StyleSheet.hairlineWidth, borderLeftColor: palette.line },
+  currencyRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'baseline',
+    gap: 8, paddingVertical: 3 },
+  currencyCode: { color: palette.muted, fontSize: 11, fontWeight: '600' },
+  currencyValue: { color: palette.ink, fontSize: 17, fontWeight: '700', fontVariant: ['tabular-nums'], flexShrink: 1 },
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   section: { gap: 10 },
   rows: { backgroundColor: palette.panel, borderRadius: 16, paddingHorizontal: 12 },
   detailHeader: { gap: 8 },
   panel: { backgroundColor: palette.raised, padding: 14, borderRadius: 16, gap: 8 },
   keyboardBar: { paddingHorizontal: 12, paddingVertical: 4, alignItems: 'flex-end' },
-  tabBar: { flexDirection: 'row', flexWrap: 'wrap', width: '100%', maxWidth: 540, alignSelf: 'center',
-    borderTopColor: palette.line, borderTopWidth: StyleSheet.hairlineWidth, paddingHorizontal: 4 },
-  tab: { flexBasis: '25%', minHeight: 48, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 2, paddingVertical: 6 },
-  wideTab: { flexBasis: '50%' },
-  tabLabel: { color: palette.muted, fontSize: 15, textAlign: 'center' },
-  tabActive: { color: palette.ink, fontWeight: '600' },
-  accountRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center', justifyContent: 'space-between',
-    paddingVertical: 12, minHeight: 62, borderBottomColor: palette.line, borderBottomWidth: StyleSheet.hairlineWidth },
-  pressed: { opacity: 0.58 },
+  archiveLink: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 44 },
+  accountRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center', paddingHorizontal: 12,
+    paddingVertical: 9, minHeight: 59 },
+  rowDivider: { borderTopColor: palette.line, borderTopWidth: StyleSheet.hairlineWidth },
+  pressed: { backgroundColor: palette.ground },
   identity: { flexGrow: 1, flexBasis: '44%', minWidth: 96, gap: 3 },
-  accountValue: { color: palette.ink, fontSize: 16, fontWeight: '600', fontVariant: ['tabular-nums'], textAlign: 'right',
-    flexShrink: 1 },
+  accountIdentity: { flexDirection: 'row', alignItems: 'center', flexGrow: 1, flexBasis: '44%', minWidth: 104, gap: 10 },
+  accountLabels: { flex: 1, gap: 2 },
+  accountValue: { color: palette.ink, fontSize: 14, fontWeight: '600', fontVariant: ['tabular-nums'],
+    textAlign: 'right', marginLeft: 'auto', flexShrink: 1 },
   dateLabel: { color: palette.muted, fontSize: 13, paddingTop: 12 },
   historyRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 8,
     paddingVertical: 10, borderBottomColor: palette.line, borderBottomWidth: StyleSheet.hairlineWidth },

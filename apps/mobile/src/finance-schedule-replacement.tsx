@@ -143,7 +143,7 @@ export function ScheduleReplacement({ rule, accounts, categories, access, lang, 
     <Choice title={t.destination} value={destinationId} disabled={disabled}
       options={accounts.filter((item) => !item.archived).map((item) => ({ id: item.accountId, label: item.name + ' · ' + item.currency }))}
       onChange={setDestination} testID="schedule-replace-account" />
-    {busy && destination && <ActivityIndicator color={palette.mint} accessibilityLabel={f.loading} />}
+    {busy && destination && <ActivityIndicator color={palette.accent} accessibilityLabel={f.loading} />}
     {readError && <View style={layout.decision}>
       <FinanceAlert>{['VERSION_CONFLICT', 'SCHEDULE_RULE_STATE_CONFLICT', 'SCHEDULE_REPLACEMENT_CONFLICT'].includes(readError)
         ? t.conflict : copy[lang].errors[readError] ?? t.previewUnavailable}</FinanceAlert>

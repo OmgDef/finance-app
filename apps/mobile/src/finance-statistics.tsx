@@ -6,9 +6,10 @@ import { copy } from './copy';
 import { apiErrorCode } from './finance-commands';
 import type { FinanceAccess } from './finance-commands';
 import { financeCopy } from './finance-copy';
-import { currencies, financialDate, formatFinancialDate, formatMoney } from './finance-format';
+import { currencies, financialDate, formatAmount, formatFinancialDate, formatMoney } from './finance-format';
 import type { Currency } from './finance-format';
 import { useLocalizedInput } from './finance-forms';
+import { FinanceIcon } from './finance-icon';
 import { statisticsCopy } from './finance-statistics-copy';
 import { Choice, FinanceAlert, FinanceButton, FinanceField, palette, styles } from './finance-ui';
 
@@ -30,7 +31,7 @@ function queryFor({ fromDate, throughDate, accountId, categoryId, type, currency
   return query;
 }
 
-export function useStatistics(access: FinanceAccess, enabled: boolean) {
+export function useStatistics(access: FinanceAccess, enabled: boolean, dataRevision: number) {
   const [filters, setFilters] = useState<Filters>({});
   const [drill, setDrill] = useState<Drill>();
   const [revision, setRevision] = useState(0);
@@ -40,7 +41,7 @@ export function useStatistics(access: FinanceAccess, enabled: boolean) {
   const activeScope = useRef('');
   const effective: Filters = drill ? { ...filters, ...drill, type: 'expense' } : filters;
   const month = effective.fromDate === undefined ? access.profile.today.slice(0, 7) : '';
-  const scope = JSON.stringify([revision, month, queryFor(effective).toString()]);
+  const scope = JSON.stringify([revision, dataRevision, month, queryFor(effective).toString()]);
   activeScope.current = enabled ? scope : '';
   const visible = snapshot?.scope === scope ? snapshot : undefined;
 
@@ -134,17 +135,19 @@ function FilterForm({ current, report, today, accounts, categories, lang, onAppl
     });
   }
 
-  return <View style={layout.filterForm}>
+  return <View style={[styles.surface, layout.filterForm]}>
     <Choice title={t.period} value={period} onChange={setPeriod} testID="statistics-period"
       options={[{ id: 'month', label: t.month }, { id: 'custom', label: t.custom }]} />
     {period === 'custom' && <View style={wideFields ? layout.dateInputs : layout.stackedFields}>
       <View style={wideFields && layout.dateInput}>
         <FinanceField title={t.from} hint={f.dateHint} value={from.text} onChangeText={from.setText}
-          keyboardType="numbers-and-punctuation" maxLength={10} testID="statistics-from-date" />
+          keyboardType="numbers-and-punctuation" inputAccessoryViewID={undefined} returnKeyType="done"
+          maxLength={10} testID="statistics-from-date" />
       </View>
       <View style={wideFields && layout.dateInput}>
         <FinanceField title={t.through} hint={f.dateHint} value={through.text} onChangeText={through.setText}
-          keyboardType="numbers-and-punctuation" maxLength={10} testID="statistics-through-date" />
+          keyboardType="numbers-and-punctuation" inputAccessoryViewID={undefined} returnKeyType="done"
+          maxLength={10} testID="statistics-through-date" />
       </View>
     </View>}
     <Choice title={t.type} value={type} onChange={(value) => {
@@ -184,7 +187,8 @@ export function StatisticsScreen({ statistics, accounts, categories, lang, today
   const t = statisticsCopy[lang];
   const f = financeCopy[lang];
   const [editing, setEditing] = useState(false);
-  const { fontScale } = useWindowDimensions();
+  const { width, fontScale } = useWindowDimensions();
+  const stackMetrics = Math.min(width, 540) / fontScale < 300;
   const { filters, drill, report, loading, error } = statistics;
   const period = report ?? (filters.fromDate && filters.throughDate ? { fromDate: filters.fromDate, throughDate: filters.throughDate } : undefined);
   const categoryNames = new Map(categories?.map(({ id, nameEn, nameRu }) => [id, lang === 'en' ? nameEn : nameRu]));
@@ -194,6 +198,12 @@ export function StatisticsScreen({ statistics, accounts, categories, lang, today
     filters.categoryId && (categoryNames.get(filters.categoryId) ?? filters.categoryId), filters.currency].filter(Boolean);
   const errorMessage = error === 'NOT_FOUND' ? t.unavailable : error === 'REPORT_CHANGED' ? t.reportChanged
     : error === 'INVALID_REQUEST' ? f.invalidRequest : error && (copy[lang].errors[error] ?? f.error);
+  const entriesByDay = new Map<string, Entry[]>();
+  for (const entry of report?.entries ?? []) {
+    const day = entriesByDay.get(entry.date);
+    if (day) day.push(entry);
+    else entriesByDay.set(entry.date, [entry]);
+  }
 
   function apply(next: Filters) {
     statistics.apply(next);
@@ -202,18 +212,22 @@ export function StatisticsScreen({ statistics, accounts, categories, lang, today
   }
 
   return <View style={layout.report}>
-    <View style={layout.header}>
+    <View style={[styles.surface, layout.header]}>
       <View style={layout.period}>
-        {!filters.fromDate && <Text style={styles.meta}>{t.month}</Text>}
-        {period && <Text style={styles.title} testID="statistics-period">
-          {formatFinancialDate(period.fromDate, lang)} – {formatFinancialDate(period.throughDate, lang)}
-        </Text>}
-        {filterLabels.length > 0 && <Text style={styles.meta}>{filterLabels.join(' · ')}</Text>}
+        <FinanceIcon name="calendar" color={palette.accent} size={18} />
+        <View style={layout.labels}>
+          <Text style={styles.groupTitle}>{filters.fromDate ? t.period : t.month}</Text>
+          {period && <Text style={styles.meta} testID="statistics-period">
+            {formatFinancialDate(period.fromDate, lang)} – {formatFinancialDate(period.throughDate, lang)}
+          </Text>}
+        </View>
       </View>
       <Pressable accessibilityRole="button" accessibilityState={{ expanded: editing }} testID="statistics-filters"
-        onPress={() => setEditing(!editing)} style={({ pressed }) => [styles.button, (editing || pressed) && styles.checked]}>
+        onPress={() => setEditing(!editing)} style={({ pressed }) => [styles.button, layout.filters, (editing || pressed) && styles.checked]}>
+        <FinanceIcon name="filters" color={palette.accent} size={16} />
         <Text style={styles.buttonText}>{t.filters}</Text>
       </Pressable>
+      {filterLabels.length > 0 && <Text style={[styles.meta, layout.filterSummary]}>{filterLabels.join(' · ')}</Text>}
     </View>
     {editing && <FilterForm current={filters} report={report} today={today} accounts={accounts} categories={categories}
       lang={lang} onApply={apply} />}
@@ -221,106 +235,135 @@ export function StatisticsScreen({ statistics, accounts, categories, lang, today
       <FinanceButton title={t.report} onPress={() => { setEditing(false); statistics.closeCategory(); scrollToTop(); }}
         testID="statistics-clear-drill" />
     </View>}
-    {errorMessage && <View style={layout.section}>
+    {errorMessage && <View style={[styles.surface, layout.message]}>
       <FinanceAlert testID="statistics-error">{errorMessage}</FinanceAlert>
       <FinanceButton title={copy[lang].retry} onPress={statistics.refresh} testID="statistics-retry" />
     </View>}
-    {!report && loading && <ActivityIndicator color={palette.mint} accessibilityLabel={f.loading} />}
-    {report && <>
+    {(loading || report) && <>
       <View style={layout.section}>
-        <Text accessibilityRole="header" style={styles.section}>{t.totals}</Text>
-        {report.totals.length === 0 ? <Text style={styles.meta} testID="statistics-empty">{t.empty}</Text> :
-          <View style={layout.totals}>
-            {report.totals.map(({ currency, incomeMinor, expenseMinor }, index) =>
-              <View key={currency} style={[layout.totalGroup, index > 0 && layout.divider]} testID={'statistics-total-' + currency}>
-                <Text accessibilityRole="header" style={styles.title}>{currency}</Text>
-                <View style={fontScale >= 1.5 ? layout.stackedMetrics : layout.metrics}>
-                  <View style={layout.metric}>
-                    <Text style={styles.meta}>{t.income}</Text>
-                    <Text style={layout.amount}>{formatMoney(incomeMinor, currency, lang)}</Text>
-                  </View>
-                  <View style={layout.metric}>
-                    <Text style={styles.meta}>{t.expenses}</Text>
-                    <Text style={layout.amount}>{formatMoney(expenseMinor, currency, lang)}</Text>
-                  </View>
+        <Text accessibilityRole="header" style={styles.groupTitle}>{t.totals}</Text>
+        <View style={styles.surface}>
+          {!report && <ActivityIndicator style={layout.message} color={palette.accent} accessibilityLabel={f.loading} />}
+          {report?.totals.length === 0 && <Text style={[styles.meta, layout.message]} testID="statistics-empty">{t.empty}</Text>}
+          {report?.totals.map(({ currency, incomeMinor, expenseMinor }, index) => (
+            <View key={currency} style={[layout.totalGroup, index > 0 && layout.divider]} testID={'statistics-total-' + currency}>
+              <Text accessibilityRole="header" style={layout.currency}>{currency}</Text>
+              <View style={stackMetrics ? layout.stackedMetrics : layout.metrics}>
+                <View style={[layout.metric, !stackMetrics && layout.metricColumn]}>
+                  <Text style={styles.meta}>{t.income}</Text>
+                  <Text style={[layout.amount, layout.income]} accessibilityLabel={formatMoney(incomeMinor, currency, lang)}>
+                    {formatAmount(incomeMinor, lang)}
+                  </Text>
                 </View>
-              </View>)}
-          </View>}
+                <View style={[layout.metric, !stackMetrics && layout.metricColumn]}>
+                  <Text style={styles.meta}>{t.expenses}</Text>
+                  <Text style={layout.amount} accessibilityLabel={formatMoney(expenseMinor, currency, lang)}>
+                    {formatAmount(expenseMinor, lang)}
+                  </Text>
+                </View>
+              </View>
+            </View>
+          ))}
+        </View>
       </View>
-      {!drill && report.totals.length > 0 && <View style={layout.section}>
-        <Text accessibilityRole="header" style={styles.section}>{t.expensesByCategory}</Text>
-        {report.categories.length === 0 && <Text style={styles.meta}>{t.emptyExpenses}</Text>}
-        {report.totals.map(({ currency, expenseMinor }) => {
-          const group = report.categories.filter((category) => category.currency === currency);
-          if (!group.length) return null;
-          return <View key={currency} style={layout.categoryGroup}>
-            <Text accessibilityRole="header" style={styles.meta}>{currency}</Text>
-            {group.map((entry) => <Pressable key={entry.categoryId} accessibilityRole="button"
-              testID={`statistics-expense-${currency}-${entry.categoryId}`}
-              onPress={() => { setEditing(false); statistics.openCategory(entry); scrollToTop(); }}
-              style={({ pressed }) => [layout.categoryRow, pressed && styles.dimmed]}>
-              <View style={layout.line}>
-                <Text style={styles.title}>{categoryNames.get(entry.categoryId) ?? entry.categoryId}</Text>
-                <Text style={layout.entryAmount}>{formatMoney(entry.amountMinor, currency, lang)}</Text>
+      {report && !drill && report.totals.length > 0 && <View style={layout.section}>
+        <Text accessibilityRole="header" style={styles.groupTitle}>{t.expensesByCategory}</Text>
+        <View style={styles.surface}>
+          {report.categories.length === 0 && <Text style={[styles.meta, layout.message]}>{t.emptyExpenses}</Text>}
+          {report.totals.filter(({ currency }) => report.categories.some((category) => category.currency === currency))
+            .map(({ currency, expenseMinor }, index) => (
+              <View key={currency} style={[layout.categoryGroup, index > 0 && layout.divider]}>
+                <Text accessibilityRole="header" style={layout.categoryCurrency}>{currency}</Text>
+                {report.categories.filter((category) => category.currency === currency).map((entry) => (
+                  <Pressable key={entry.categoryId} accessibilityRole="button"
+                    testID={`statistics-expense-${currency}-${entry.categoryId}`}
+                    onPress={() => { setEditing(false); statistics.openCategory(entry); scrollToTop(); }}
+                    style={({ pressed }) => [layout.categoryRow, pressed && layout.pressed]}>
+                    <View style={layout.line}>
+                      <Text style={styles.title}>{categoryNames.get(entry.categoryId) ?? entry.categoryId}</Text>
+                      <Text style={layout.entryAmount}>{formatMoney(entry.amountMinor, currency, lang)}</Text>
+                    </View>
+                    <View style={layout.track} importantForAccessibility="no" accessible={false}>
+                      <View style={[layout.bar, { width: categoryWidth(entry.amountMinor, expenseMinor) }]} />
+                    </View>
+                  </Pressable>
+                ))}
               </View>
-              <View style={layout.track} accessible={false}>
-                <View style={[layout.bar, { width: categoryWidth(entry.amountMinor, expenseMinor) }]} />
-              </View>
-            </Pressable>)}
-          </View>;
-        })}
+            ))}
+        </View>
       </View>}
-      {report.entries.length > 0 && <View style={layout.section}>
-        <Text accessibilityRole="header" style={styles.section}>{t.transactions}</Text>
-        {report.entries.map((entry, index) => {
-          const title = categoryNames.get(entry.categoryId) ?? (entry.type === 'income' ? f.incomeEntry : f.expenseEntry);
-          const account = accountNames.get(entry.accountId);
-          const dateChanged = report.entries[index - 1]?.date !== entry.date;
-          return <View key={entry.transactionId}>
-            {dateChanged && <Text accessibilityRole="header" style={layout.day}>{formatFinancialDate(entry.date, lang)}</Text>}
-            <Pressable accessibilityRole="button" onPress={() => onTransaction(entry)} testID={'statistics-transaction-' + entry.transactionId}
-              style={({ pressed }) => [layout.transaction, pressed && styles.dimmed]}>
-              <View style={layout.identity}>
-                <Text style={styles.title}>{entry.comment || title}</Text>
-                <Text style={styles.meta}>{[entry.comment && title, account].filter(Boolean).join(' · ') || title}</Text>
-              </View>
-              <Text style={layout.entryAmount}>{formatMoney(entry.amountMinor, entry.currency, lang, true)}</Text>
-            </Pressable>
-          </View>;
-        })}
+      {report && entriesByDay.size > 0 && <View style={layout.section}>
+        <Text accessibilityRole="header" style={styles.groupTitle}>{t.transactions}</Text>
+        <View style={styles.surface}>
+          {[...entriesByDay].map(([date, entries], dayIndex) => (
+            <View key={date} style={dayIndex > 0 && layout.divider}>
+              <Text accessibilityRole="header" style={layout.day}>{formatFinancialDate(date, lang)}</Text>
+              {entries.map((entry, rowIndex) => {
+                const isIncome = entry.type === 'income';
+                const title = categoryNames.get(entry.categoryId) ?? (isIncome ? f.incomeEntry : f.expenseEntry);
+                const account = accountNames.get(entry.accountId);
+                return <Pressable key={entry.transactionId} accessibilityRole="button" onPress={() => onTransaction(entry)}
+                  testID={'statistics-transaction-' + entry.transactionId}
+                  style={({ pressed }) => [layout.transaction, rowIndex > 0 && layout.divider, pressed && layout.pressed]}>
+                  <View style={layout.identity}>
+                    <FinanceIcon name={isIncome ? 'income' : 'expense'} color={isIncome ? palette.positive : palette.muted} size={18} />
+                    <View style={layout.labels}>
+                      <Text style={styles.title}>{entry.comment || title}</Text>
+                      <Text style={styles.meta}>{[entry.comment && title, account].filter(Boolean).join(' · ') || title}</Text>
+                    </View>
+                  </View>
+                  <Text style={[layout.entryAmount, isIncome && layout.income]}>
+                    {formatMoney(entry.amountMinor, entry.currency, lang, true)}
+                  </Text>
+                </Pressable>;
+              })}
+            </View>
+          ))}
+        </View>
         {report.next && error !== 'REPORT_CHANGED' && <FinanceButton title={f.loadMore} disabled={loading} onPress={statistics.more}
           testID="statistics-more" />}
-        {loading && <ActivityIndicator color={palette.mint} accessibilityLabel={f.loading} />}
+        {loading && <ActivityIndicator color={palette.accent} accessibilityLabel={f.loading} />}
       </View>}
     </>}
   </View>;
 }
 
 const layout = StyleSheet.create({
-  report: { gap: 22 },
-  header: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
-  period: { flexGrow: 1, flexShrink: 1, gap: 4 },
-  filterForm: { backgroundColor: palette.panel, borderRadius: 16, padding: 12, gap: 14 },
+  report: { gap: 18 },
+  header: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between',
+    gap: 8, padding: 10 },
+  period: { flexDirection: 'row', alignItems: 'center', flexGrow: 1, flexBasis: '48%', minWidth: 128, gap: 8 },
+  labels: { flex: 1, gap: 3 },
+  filterSummary: { width: '100%', paddingHorizontal: 4 },
+  filters: { paddingHorizontal: 8 },
+  filterForm: { padding: 12, gap: 14 },
   dateInputs: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   stackedFields: { gap: 8 },
   dateInput: { flex: 1, minWidth: 128 },
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'flex-start' },
-  section: { gap: 10 },
-  totals: { backgroundColor: palette.panel, borderRadius: 16, paddingHorizontal: 14 },
-  totalGroup: { gap: 6, paddingVertical: 10 },
+  section: { gap: 8 },
+  message: { padding: 12, gap: 8 },
+  totalGroup: { gap: 6, paddingHorizontal: 12, paddingVertical: 10 },
+  currency: { color: palette.muted, fontSize: 12, fontWeight: '600' },
   divider: { borderTopColor: palette.line, borderTopWidth: StyleSheet.hairlineWidth },
-  metrics: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  stackedMetrics: { gap: 6 },
-  metric: { flexGrow: 1, flexBasis: '46%', minWidth: 104, alignItems: 'flex-end', gap: 3 },
-  amount: { color: palette.ink, fontSize: 19, fontWeight: '600', fontVariant: ['tabular-nums'], textAlign: 'right' },
-  categoryGroup: { gap: 2 },
-  categoryRow: { paddingVertical: 8, gap: 5, minHeight: 44, justifyContent: 'center' },
+  metrics: { flexDirection: 'row', gap: 10 },
+  stackedMetrics: { gap: 8 },
+  metric: { gap: 3 },
+  metricColumn: { flex: 1 },
+  amount: { color: palette.ink, fontSize: 19, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  income: { color: palette.positive },
+  categoryGroup: { paddingVertical: 6 },
+  categoryCurrency: { color: palette.muted, fontSize: 12, fontWeight: '600', paddingHorizontal: 12, paddingTop: 4 },
+  categoryRow: { paddingHorizontal: 12, paddingVertical: 8, gap: 6, minHeight: 48, justifyContent: 'center' },
   line: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'baseline', justifyContent: 'space-between', gap: 6 },
-  track: { height: 3, borderRadius: 2, backgroundColor: palette.line, overflow: 'hidden' },
-  bar: { height: 3, backgroundColor: palette.mint },
-  day: { color: palette.muted, fontSize: 14, paddingTop: 4, paddingBottom: 6 },
+  track: { height: 4, borderRadius: 2, backgroundColor: palette.raised, overflow: 'hidden' },
+  bar: { height: 4, borderRadius: 2, backgroundColor: palette.accent },
+  day: { color: palette.muted, fontSize: 13, fontWeight: '600', backgroundColor: palette.ground,
+    paddingHorizontal: 12, paddingVertical: 6 },
   transaction: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', minHeight: 48,
-    gap: 6, paddingVertical: 6, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: palette.line },
-  identity: { flexGrow: 1, flexBasis: '45%', minWidth: 112, gap: 3 },
-  entryAmount: { color: palette.ink, fontSize: 15, fontWeight: '600', fontVariant: ['tabular-nums'], textAlign: 'right', flexShrink: 1 },
+    gap: 8, paddingHorizontal: 12, paddingVertical: 8 },
+  identity: { flexDirection: 'row', alignItems: 'center', flexGrow: 1, flexBasis: '45%', minWidth: 104, gap: 8 },
+  pressed: { backgroundColor: palette.ground },
+  entryAmount: { color: palette.ink, fontSize: 15, fontWeight: '600', fontVariant: ['tabular-nums'],
+    textAlign: 'right', marginLeft: 'auto', flexShrink: 1 },
 });

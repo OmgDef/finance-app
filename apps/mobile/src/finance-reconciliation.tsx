@@ -205,7 +205,7 @@ export function ReconciliationForm({ account, categories, access, lang, visible,
       <Text style={styles.meta}>{t.currentBalance}</Text>
       {current ? <Text style={styles.value} testID="finance-reconcile-current">
         {formatMoney(current.preview.balanceMinor, currency, lang)}
-      </Text> : <ActivityIndicator color={palette.mint} accessibilityLabel={t.loading} />}
+      </Text> : <ActivityIndicator color={palette.accent} accessibilityLabel={t.loading} />}
     </View>}
     <FinanceField title={t.actualBalance + ' (' + currency + ')'} value={actual.text} onChangeText={(value) => {
       actual.setText(value);
