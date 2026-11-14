@@ -1,0 +1,8 @@
+{
+  "name": "@teta/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts", "./client": "./src/client.ts", "./money": "./src/money.ts" },
+  "dependencies": { "@sinclair/typebox": "0.34.52" }
+}

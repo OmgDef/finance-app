@@ -1,0 +1,28 @@
+.audit-shell { display: grid; gap: 16px; }
+.audit-shell h1, .audit-shell h2, .audit-shell p { margin: 0; }
+.audit-filter, .audit-events, .recovery-review form {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.audit-filter, .recovery-review form { padding: 16px; }
+.audit-filter-grid, .audit-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 16px; }
+.audit-filter-grid input { width: 100%; min-width: 0; }
+.audit-event { padding: 14px 16px; }
+.audit-event + .audit-event { border-top: 1px solid var(--line); }
+.audit-event-title { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 6px 16px; }
+.audit-event h2 { font-size: 17px; }
+.audit-event time, .audit-fields dt { color: var(--muted); font-size: 14px; }
+.audit-fields { margin: 12px 0 0; }
+.audit-fields dd { margin: 2px 0 0; overflow-wrap: anywhere; }
+.audit-reason { grid-column: 1 / -1; }
+.audit-shell > :is(button, a) { justify-self: start; }
+.recovery-owner { overflow-wrap: anywhere; }
+.audit-nav { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 22px; }
+.audit-nav [aria-current="page"] { border-color: var(--accent); color: var(--accent); background: var(--tint); }
+@media (max-width: 700px) {
+  .audit-filter-grid, .audit-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 460px) {
+  .audit-filter-grid, .audit-fields { grid-template-columns: minmax(0, 1fr); }
+}

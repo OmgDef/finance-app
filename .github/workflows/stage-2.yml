@@ -1,0 +1,58 @@
+name: Access and environment
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  access:
+    runs-on: ubuntu-24.04
+    services:
+      mysql:
+        image: mysql:8.4.13
+        env:
+          MYSQL_ROOT_PASSWORD: ci-synthetic-root
+          MYSQL_DATABASE: teta
+          MYSQL_USER: teta
+          MYSQL_PASSWORD: ci-synthetic-teta
+        ports:
+          - 3306/tcp
+        options: >-
+          --health-cmd="mysql --protocol=TCP -h 127.0.0.1 -uteta -pci-synthetic-teta teta -e 'SELECT 1'"
+          --health-interval=5s --health-timeout=5s --health-retries=30
+    env:
+      EXPO_NO_TELEMETRY: '1'
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '26.13.1'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run check
+      - run: npm run build
+      - name: Build API image
+        run: docker build --file infra/Dockerfile --target api --tag teta-api:ci .
+      - name: Migrate fresh schema and verify repeat
+        env:
+          DATABASE_URL: mysql://teta:ci-synthetic-teta@127.0.0.1:${{ job.services.mysql.ports['3306'] }}/teta
+        run: |
+          npm run migrate
+          npm run migrate
+      - name: MySQL integration scenarios
+        env:
+          TEST_DATABASE_URL: mysql://teta:ci-synthetic-teta@127.0.0.1:${{ job.services.mysql.ports['3306'] }}/teta
+          TEST_WORKER_DATABASE_URL: mysql://teta:ci-synthetic-teta@127.0.0.1:${{ job.services.mysql.ports['3306'] }}/teta_worker
+          MYSQL_SERVICE_ID: ${{ job.services.mysql.id }}
+        run: |
+          docker exec -e MYSQL_PWD=ci-synthetic-root "$MYSQL_SERVICE_ID" mysql -uroot -e "CREATE DATABASE teta_worker; GRANT ALL ON teta_worker.* TO 'teta'@'%';"
+          DATABASE_URL="$TEST_WORKER_DATABASE_URL" npm run migrate
+          npm test
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24.14.1'
+      - name: Export Hermes bundles for iOS and Android
+        run: npm exec -w @teta/mobile -- expo export --platform all --output-dir dist

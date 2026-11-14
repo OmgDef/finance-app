@@ -1,0 +1,86 @@
+x-api: &api
+  image: tetafinance-stage2-api:local
+  build:
+    context: ..
+    dockerfile: infra/Dockerfile
+    target: api
+  environment:
+    DATABASE_URL: mysql://teta:${MYSQL_PASSWORD:?Set MYSQL_PASSWORD}@db:3306/teta
+    ACCESS_KEY: ${ACCESS_KEY:?Set ACCESS_KEY}
+    TOTP_KEY: ${TOTP_KEY:?Set TOTP_KEY}
+    RECOVERY_VERSION: ${RECOVERY_VERSION:-1}
+    API_ORIGIN: ${TETA_SCHEME:-http}://${TETA_BIND_IP:?Set TETA_BIND_IP}:${TETA_API_PORT:-18443}
+    ADMIN_ORIGIN: ${TETA_SCHEME:-http}://${TETA_BIND_IP:?Set TETA_BIND_IP}:${TETA_ADMIN_PORT:-18444}
+    ALLOW_HTTP: '1'
+    PROXY_IP: ${TETA_GATEWAY_IP:-172.29.63.5}
+  depends_on:
+    db:
+      condition: service_healthy
+  networks: [backend]
+
+services:
+  db:
+    image: mysql:8.4.13
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: teta
+      MYSQL_USER: teta
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "mysql --protocol=TCP -h 127.0.0.1 -u$$MYSQL_USER -p$$MYSQL_PASSWORD $$MYSQL_DATABASE -e 'SELECT 1'"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+    volumes: [mysql:/var/lib/mysql]
+    networks: [backend]
+
+  migrate:
+    <<: *api
+    command: ["npm", "run", "migrate"]
+
+  api:
+    <<: *api
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    <<: *api
+    command: ["node", "apps/api/src/worker.ts"]
+    restart: unless-stopped
+    stop_grace_period: 30s
+    environment:
+      DATABASE_URL: mysql://teta:${MYSQL_PASSWORD:?Set MYSQL_PASSWORD}@db:3306/teta
+      RECOVERY_VERSION: ${RECOVERY_VERSION:-1}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  gateway:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+      target: gateway
+    depends_on: [api]
+    environment:
+      TETA_SCHEME: ${TETA_SCHEME:-http}
+      TETA_BIND_IP: ${TETA_BIND_IP:?Set TETA_BIND_IP}
+      TETA_API_PORT: ${TETA_API_PORT:-18443}
+      TETA_ADMIN_PORT: ${TETA_ADMIN_PORT:-18444}
+    ports:
+      - "${TETA_BIND_IP:?Set TETA_BIND_IP}:${TETA_API_PORT:-18443}:${TETA_API_PORT:-18443}"
+      - "${TETA_BIND_IP:?Set TETA_BIND_IP}:${TETA_ADMIN_PORT:-18444}:${TETA_ADMIN_PORT:-18444}"
+    volumes: [caddy:/data]
+    networks:
+      backend:
+        ipv4_address: ${TETA_GATEWAY_IP:-172.29.63.5}
+
+volumes:
+  mysql:
+  caddy:
+
+networks:
+  backend:
+    ipam:
+      config:
+        - subnet: ${TETA_BACKEND_SUBNET:-172.29.63.0/24}

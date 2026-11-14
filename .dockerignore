@@ -1,0 +1,9 @@
+.git
+.taste-skill
+**/node_modules
+**/dist
+**/.env
+**/.env.*
+apps/mobile/android
+apps/mobile/ios
+docs

@@ -1,0 +1,19 @@
+{
+  "name": "tetafinance",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "check": "tsc --noEmit -p apps/api && tsc --noEmit -p apps/admin && tsc --noEmit -p apps/mobile",
+    "build": "npm run build -w @teta/admin && npm run openapi",
+    "openapi": "node packages/contracts/src/openapi.ts",
+    "test": "node --test apps/api/test/*.test.ts",
+    "migrate": "node apps/api/src/migrate.ts",
+    "admin:configure": "node apps/api/src/operator.ts"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "typescript": "6.0.3"
+  }
+}
