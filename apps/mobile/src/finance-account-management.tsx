@@ -9,8 +9,8 @@ import { apiErrorCode } from './finance-commands';
 import type { FinanceAccess } from './finance-commands';
 import { financeCopy } from './finance-copy';
 import type { FinanceCopyKey } from './finance-copy';
-import { financialDate, formatFinancialDate, formatMoney } from './finance-format';
-import { useLocalizedInput } from './finance-forms';
+import { FinanceDateField } from './finance-date-field';
+import { formatFinancialDate, formatMoney } from './finance-format';
 import type { AccountEditor } from './finance-navigation';
 import { FinanceAlert, FinanceButton, FinanceField, palette, styles } from './finance-ui';
 
@@ -283,12 +283,12 @@ function StartDateEditor({ account, today, lang, disabled, onSave, onCancel }: {
   account: Account; today: string; lang: Language; disabled: boolean; onSave: (date: string) => void; onCancel: () => void;
 }) {
   const t = financeCopy[lang];
-  const start = useLocalizedInput(lang, formatFinancialDate(account.startDate, lang), financialDate, formatFinancialDate);
+  const [start, setStart] = useState<string>();
+  const date = start ?? account.startDate;
+  const latest = 'maturityDate' in account && account.maturityDate < today ? account.maturityDate : today;
   const [error, setError] = useState<FinanceCopyKey>();
 
   function submit() {
-    const date = start.value;
-    if (!date) return setError('invalidDate');
     if (date > today && date !== account.startDate) return setError('futureStartDate');
     if ('maturityDate' in account && date > account.maturityDate) return setError('startAfterMaturity');
     setError(undefined);
@@ -297,8 +297,8 @@ function StartDateEditor({ account, today, lang, disabled, onSave, onCancel }: {
   }
 
   return <View style={layout.form}>
-    <FinanceField title={t.startDate} hint={t.dateHint} value={start.text} onChangeText={start.setText} editable={!disabled}
-      keyboardType="numbers-and-punctuation" maxLength={10} testID="finance-edit-start-date" />
+    <FinanceDateField title={t.startDate} lang={lang} today={today} value={date} onChange={setStart} max={latest}
+      disabled={disabled} testID="finance-edit-start-date" />
     {error && <FinanceAlert>{t[error]}</FinanceAlert>}
     <View style={layout.actions}>
       <FinanceButton title={t.saveChanges} primary disabled={disabled} testID="finance-start-date-save" onPress={submit} />

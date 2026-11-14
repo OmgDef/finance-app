@@ -3,6 +3,7 @@ import type { Language } from '@teta/contracts';
 export const scheduleCopy = {
   en: {
     payments: 'Payments', newEntry: 'New entry', schedule: 'Scheduled', openSchedule: 'Open schedule',
+    filterByAccount: 'Filter by account', allAccounts: 'All accounts',
     noUpcoming: 'No upcoming entries in this period.', dates: 'Scheduled dates', rules: 'Rules',
     newRule: 'New rule', edit: 'Edit rule', pause: 'Pause rule', resume: 'Resume rule', end: 'End rule',
     create: 'Create rule', save: 'Save rule', kind: 'Operation', repeat: 'Repeat', once: 'Once', weekly: 'Weekly',
@@ -36,6 +37,7 @@ export const scheduleCopy = {
   },
   ru: {
     payments: 'Платежи', newEntry: 'Новая запись', schedule: 'Запланировано', openSchedule: 'Открыть график',
+    filterByAccount: 'Фильтр по счёту', allAccounts: 'Все счета',
     noUpcoming: 'В этом периоде нет предстоящих операций.', dates: 'Даты графика', rules: 'Правила',
     newRule: 'Новое правило', edit: 'Изменить правило', pause: 'Приостановить правило', resume: 'Возобновить правило',
     end: 'Завершить правило', create: 'Создать правило', save: 'Сохранить правило', kind: 'Операция', repeat: 'Повтор',

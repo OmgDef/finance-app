@@ -10,6 +10,19 @@ export function formatFinancialDate(date: string, lang: Language) {
   return lang === 'ru' ? [day, month, year].join('.') : [month, day, year].join('/');
 }
 
+// Android's system dialog applies its bounds in the device time zone. On iOS the picker uses UTC.
+export function dateForPicker(date: string, utc = false) {
+  if (utc) return new Date(date + 'T12:00:00Z');
+  const [year, month, day] = date.split('-').map(Number);
+  return new Date(year, month - 1, day, 12);
+}
+
+export function dateFromPicker(date: Date, utc = false) {
+  if (utc) return date.toISOString().slice(0, 10);
+  const parts = [date.getFullYear(), date.getMonth() + 1, date.getDate()];
+  return parts.map((part) => String(part).padStart(2, '0')).join('-');
+}
+
 export function dateInTimeZone(date: Date, timeZone: string) {
   try {
     const parts = new Intl.DateTimeFormat('en-US', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' })

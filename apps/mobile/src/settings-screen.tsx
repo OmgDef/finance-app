@@ -4,11 +4,18 @@ import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-nati
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { Language, Result } from '@teta/contracts';
 import { copy } from './copy';
+import { financeCopy } from './finance-copy';
 import { FinanceIcon } from './finance-icon';
 import type { FinanceIconName } from './finance-icon';
 import { FinanceAlert, palette, styles } from './finance-ui';
 
 const languageNames = { ru: 'Русский', en: 'English' } as const;
+
+export function AccountSettingsLink({ lang, onPress }: { lang: Language; onPress: () => void }) {
+  return <View style={styles.surface}>
+    <SettingRow icon="wallet" title={financeCopy[lang].accounts} onPress={onPress} testID="finance-account-settings" />
+  </View>;
+}
 
 export function SettingsScreen({ lang, profile, busy, languageError, zoneEditing, zoneEditor, notice,
   biometricsEnabled, onLanguage, onTimeZone, onBiometrics, onSignOut }: {
@@ -104,7 +111,7 @@ export function SettingsScreen({ lang, profile, busy, languageError, zoneEditing
 function SettingRow({ icon, title, value, valueID, hint, onPress, expanded, disabled, testID }: {
   icon: FinanceIconName;
   title: string;
-  value: string;
+  value?: string;
   valueID?: string;
   hint?: string;
   onPress: () => void;
@@ -112,13 +119,13 @@ function SettingRow({ icon, title, value, valueID, hint, onPress, expanded, disa
   disabled?: boolean;
   testID: string;
 }) {
-  return <Pressable accessibilityRole="button" accessibilityLabel={title + ', ' + value} accessibilityHint={hint}
+  return <Pressable accessibilityRole="button" accessibilityLabel={value ? title + ', ' + value : title} accessibilityHint={hint}
     accessibilityState={{ expanded, disabled }} onPress={onPress} disabled={disabled} testID={testID}
     style={({ pressed }) => [layout.row, (pressed || disabled) && styles.dimmed]}>
     <FinanceIcon name={icon} color={palette.muted} />
     <View style={layout.rowLabels}>
       <Text style={[styles.title, layout.rowTitle]}>{title}</Text>
-      <Text style={styles.meta} testID={valueID}>{value}</Text>
+      {value !== undefined && <Text style={styles.meta} testID={valueID}>{value}</Text>}
     </View>
     <FinanceIcon name={expanded ? 'chevron-down' : 'chevron'} color={palette.muted} size={15} />
   </Pressable>;

@@ -6,17 +6,18 @@ import { copy } from './copy';
 import { apiErrorCode } from './finance-commands';
 import type { FinanceAccess, FinanceDraft } from './finance-commands';
 import { financeCopy } from './finance-copy';
-import { financialDate, formatFinancialDate, formatProfileMoment } from './finance-format';
+import { FinanceDateField } from './finance-date-field';
+import { formatFinancialDate, formatProfileMoment } from './finance-format';
 import { scheduleCopy } from './finance-schedule-copy';
 import { ScheduleEditor } from './finance-schedule-editor';
-import { Choice, FinanceAlert, FinanceButton, FinanceField, palette, styles } from './finance-ui';
+import { Choice, FinanceAlert, FinanceButton, palette, styles } from './finance-ui';
 
 type Account = Result<'listAccounts'>['accounts'][number];
 type Category = Result<'listCategories'>['categories'][number];
 type Rule = Result<'getScheduleRule'>;
 type Preview = Result<'previewScheduleRuleReplacement'>;
 type Create = Body<'createScheduleRule'>;
-type Decision = { kind: 'carry' | 'none'; input?: { text: string; lang: Language } };
+type Decision = { kind: 'carry' | 'none'; targetDate?: string };
 type Draft = Extract<FinanceDraft, { kind: 'schedule.replace' }>;
 
 function matchesRuleDate(date: string, rule: Create) {
@@ -103,7 +104,7 @@ export function ScheduleReplacement({ rule, accounts, categories, access, lang, 
         resolved.push({ sourceDate: source.date, targetDate: null });
         continue;
       }
-      const target = decision.input && financialDate(decision.input.text, decision.input.lang);
+      const target = decision.targetDate;
       if (!target || !matchesRuleDate(target, fields)) return setValidation('invalidSkipDate');
       if (targets.has(target)) return setValidation('duplicateSkipDate');
       targets.add(target);
@@ -115,29 +116,29 @@ export function ScheduleReplacement({ rule, accounts, categories, access, lang, 
     } });
   }
 
-  const skipDecisions = preview?.skippedDates.length ? <View style={layout.section}>
-    <Text accessibilityRole="header" style={styles.section}>{t.replacementSkips}</Text>
-    {preview.skippedDates.map(({ date, reason }) => {
-      const decision = decisions[date];
-      const raw = decision?.input;
-      const parsed = raw && financialDate(raw.text, raw.lang);
-      const value = raw && raw.lang !== lang && parsed ? formatFinancialDate(parsed, lang) : raw?.text ?? '';
-      return <View key={date} style={layout.decision}>
-        <Choice title={formatFinancialDate(date, lang)} value={decision?.kind ?? ''}
-          options={[{ id: 'carry', label: t.transferSkip }, { id: 'none', label: t.noMatchingDate }]}
-          disabled={disabled || waiting || !!readError} testID={'schedule-replace-skip-' + date}
-          onChange={(kind) => {
-            if (kind) setDecisions((previous) => ({ ...previous, [date]: { kind, input: previous[date]?.input } }));
-          }} />
-        <Text style={styles.meta}>{reason}</Text>
-        {decision?.kind === 'carry' && <FinanceField title={t.newOccurrenceDate} hint={f.dateHint} value={value}
-          onChangeText={(text) => setDecisions((previous) => ({ ...previous, [date]: { kind: 'carry', input: { text, lang } } }))}
-          editable={!disabled && !waiting && !readError} keyboardType="numbers-and-punctuation" maxLength={10}
-          testID={'schedule-replace-target-' + date} />}
-      </View>;
-    })}
-    {validation && <FinanceAlert>{t[validation]}</FinanceAlert>}
-  </View> : null;
+  function renderSkipDecisions({ firstDate, endDate, frequency }: Pick<Create, 'firstDate' | 'endDate' | 'frequency'>) {
+    if (!currentPreview || !preview?.skippedDates.length) return null;
+    return <View style={layout.section}>
+      <Text accessibilityRole="header" style={styles.section}>{t.replacementSkips}</Text>
+      {preview.skippedDates.map(({ date, reason }) => {
+        const decision = decisions[date];
+        return <View key={date} style={layout.decision}>
+          <Choice title={formatFinancialDate(date, lang)} value={decision?.kind ?? ''}
+            options={[{ id: 'carry', label: t.transferSkip }, { id: 'none', label: t.noMatchingDate }]}
+            disabled={disabled || waiting || !!readError} testID={'schedule-replace-skip-' + date}
+            onChange={(kind) => {
+              if (kind) setDecisions((previous) => ({ ...previous, [date]: { kind, targetDate: previous[date]?.targetDate } }));
+            }} />
+          <Text style={styles.meta}>{reason}</Text>
+          {decision?.kind === 'carry' && <FinanceDateField title={t.newOccurrenceDate} lang={lang} today={today}
+            value={decision.targetDate ?? null} min={firstDate} max={(frequency === 'once' ? firstDate : endDate) ?? undefined}
+            onChange={(targetDate) => setDecisions((previous) => ({ ...previous, [date]: { kind: 'carry', targetDate } }))}
+            disabled={disabled || waiting || !!readError} testID={'schedule-replace-target-' + date} />}
+        </View>;
+      })}
+      {validation && <FinanceAlert>{t[validation]}</FinanceAlert>}
+    </View>;
+  }
 
   return <View style={layout.section}>
     <Choice title={t.destination} value={destinationId} disabled={disabled}
@@ -162,7 +163,7 @@ export function ScheduleReplacement({ rule, accounts, categories, access, lang, 
       <ScheduleEditor key={destinationId + ':' + previewState.rule.ruleVersion} mode="replace" accounts={accounts}
         categories={categories} lang={lang} today={today} scopedAccountId={null} destination={destination}
         earliestFirstDate={preview.earliestFirstDate} rule={previewState.rule}
-        disabled={disabled || waiting || !!readError} onSave={submit} skipDecisions={currentPreview && skipDecisions} />
+        disabled={disabled || waiting || !!readError} onSave={submit} renderSkipDecisions={renderSkipDecisions} />
     </View>}
   </View>;
 }

@@ -5,7 +5,7 @@ import type { SchedulePage } from './finance-schedule';
 export type AccountEditor = { kind: 'rename' | 'startDate' } | { kind: 'card'; cardId?: string };
 type AccountPage = { name: 'history' | 'manage' | 'reconcile'; accountId: string } |
   { name: 'accountEditor'; accountId: string; editor: AccountEditor };
-export type FinancePage = { name: 'archive' | 'addAccount' } | AccountPage | SchedulePage |
+export type FinancePage = { name: 'archive' | 'addAccount' | 'accountSettings' } | AccountPage | SchedulePage |
   { name: 'record'; kind: TransactionFields['type']; accountId: string | null } |
   { name: 'transaction'; transactionId: string } | { name: 'revise'; transactionId: string; version?: number };
 
@@ -22,6 +22,7 @@ export function financePage(route: FinanceRoute, params: Record<string, string |
   const transactionId = routeParameter(params.transactionId);
   switch (route) {
     case 'archive':
+    case 'accountSettings':
     case 'addAccount': return { name: route };
     case 'history':
     case 'manage':
@@ -68,6 +69,7 @@ export function financePage(route: FinanceRoute, params: Record<string, string |
 export function financePath(page: FinancePage): string {
   switch (page.name) {
     case 'archive': return '/accounts/archive';
+    case 'accountSettings': return '/settings/accounts';
     case 'addAccount': return '/accounts/new';
     case 'history': return '/accounts/' + encodeURIComponent(page.accountId);
     case 'manage': return '/accounts/' + encodeURIComponent(page.accountId) + '/manage';

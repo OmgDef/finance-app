@@ -7,12 +7,12 @@ import { copy } from './copy';
 import { apiErrorCode } from './finance-commands';
 import type { FinanceAccess } from './finance-commands';
 import { financeCopy } from './finance-copy';
-import { currencies, financialDate, formatAmount, formatFinancialDate, formatMoney } from './finance-format';
+import { FinanceDateField } from './finance-date-field';
+import { currencies, formatAmount, formatFinancialDate, formatMoney } from './finance-format';
 import type { Currency } from './finance-format';
-import { useLocalizedInput } from './finance-forms';
 import { FinanceIcon } from './finance-icon';
 import { statisticsCopy } from './finance-statistics-copy';
-import { Choice, FinanceAlert, FinanceButton, FinanceField, palette, styles } from './finance-ui';
+import { Choice, FinanceAlert, FinanceButton, palette, styles } from './finance-ui';
 
 type Report = Result<'getStatistics'>;
 type Entry = Report['entries'][number];
@@ -116,19 +116,19 @@ function FilterForm({ current, report, today, accounts, categories, lang, onAppl
   const [type, setType] = useState<NonNullable<Filters['type']> | 'all'>(current.type ?? 'all');
   const [currency, setCurrency] = useState<Currency | 'all'>(current.currency ?? 'all');
   const [invalid, setInvalid] = useState(false);
-  const from = useLocalizedInput(lang, formatFinancialDate(current.fromDate ?? report?.fromDate ?? today, lang),
-    financialDate, formatFinancialDate);
-  const through = useLocalizedInput(lang, formatFinancialDate(current.throughDate ?? report?.throughDate ?? today, lang),
-    financialDate, formatFinancialDate);
+  const [from, setFrom] = useState<string>();
+  const [through, setThrough] = useState<string>();
+  const fromDate = from ?? current.fromDate ?? report?.fromDate ?? today;
+  const throughDate = through ?? current.throughDate ?? report?.throughDate ?? today;
 
   function apply() {
-    if (period === 'custom' && (!from.value || !through.value || from.value > through.value)) {
+    if (period === 'custom' && fromDate > throughDate) {
       setInvalid(true);
       return;
     }
     void KeyboardController.dismiss();
     onApply({
-      ...(period === 'custom' && { fromDate: from.value, throughDate: through.value }),
+      ...(period === 'custom' && { fromDate, throughDate }),
       accountId: account === 'all' ? undefined : account,
       categoryId: category === 'all' ? undefined : category,
       type: type === 'all' ? undefined : type,
@@ -141,12 +141,12 @@ function FilterForm({ current, report, today, accounts, categories, lang, onAppl
       options={[{ id: 'month', label: t.month }, { id: 'custom', label: t.custom }]} />
     {period === 'custom' && <View style={wideFields ? layout.dateInputs : layout.stackedFields}>
       <View style={wideFields && layout.dateInput}>
-        <FinanceField title={t.from} hint={f.dateHint} value={from.text} onChangeText={from.setText}
-          keyboardType="numbers-and-punctuation" maxLength={10} testID="statistics-from-date" />
+        <FinanceDateField title={t.from} lang={lang} today={today} value={fromDate} onChange={setFrom}
+          max={throughDate} testID="statistics-from-date" />
       </View>
       <View style={wideFields && layout.dateInput}>
-        <FinanceField title={t.through} hint={f.dateHint} value={through.text} onChangeText={through.setText}
-          keyboardType="numbers-and-punctuation" maxLength={10} testID="statistics-through-date" />
+        <FinanceDateField title={t.through} lang={lang} today={today} value={throughDate} onChange={setThrough}
+          min={fromDate} testID="statistics-through-date" />
       </View>
     </View>}
     <Choice title={t.type} value={type} onChange={(value) => {

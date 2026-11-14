@@ -5,9 +5,9 @@ import type { Language, Result } from '@teta/contracts';
 import type { FinanceDraft, TransactionFields } from './finance-commands';
 import { financeCopy } from './finance-copy';
 import type { FinanceCopyKey } from './finance-copy';
+import { FinanceDateField } from './finance-date-field';
 import {
-  amountInMinorUnits, currencies, depositRate, financialDate, formatAmount, formatFinancialDate, formatRate,
-  formatTransferRate,
+  amountInMinorUnits, currencies, depositRate, formatAmount, formatRate, formatTransferRate,
 } from './finance-format';
 import type { Currency } from './finance-format';
 import { Choice, FinanceAlert, FinanceButton, FinanceField, styles as uiStyles } from './finance-ui';
@@ -32,10 +32,11 @@ export function AccountForm({ lang, today, disabled, onSubmit }: Props & { today
   const [kind, setKind] = useState<Kind>('regular');
   const [name, setName] = useState('');
   const [currency, setCurrency] = useState<Currency>('EUR');
-  const start = useLocalizedInput(lang, formatFinancialDate(today, lang), financialDate, formatFinancialDate);
+  const [start, setStart] = useState<string>();
+  const startDate = start ?? today;
   const opening = useLocalizedInput(lang, '0', amountInMinorUnits, formatAmount);
   const rate = useLocalizedInput(lang, '', depositRate, formatRate);
-  const maturity = useLocalizedInput(lang, '', financialDate, formatFinancialDate);
+  const [maturityDate, setMaturityDate] = useState<string | null>(null);
   const [error, setError] = useState<FinanceCopyKey>();
   const validate = (code: FinanceCopyKey) => setError(code);
 
@@ -43,8 +44,6 @@ export function AccountForm({ lang, today, disabled, onSubmit }: Props & { today
     if (disabled) return;
     void KeyboardController.dismiss();
     if (!name.trim()) return validate('invalidName');
-    const startDate = start.value;
-    if (!startDate) return validate('invalidDate');
     if (startDate > today) return validate('futureStartDate');
     const openingBalanceMinor = opening.value;
     if (openingBalanceMinor === undefined) return validate('invalidAmount');
@@ -52,7 +51,6 @@ export function AccountForm({ lang, today, disabled, onSubmit }: Props & { today
     if (kind === 'deposit') {
       const annualRatePercent = rate.value;
       if (annualRatePercent === undefined) return validate('invalidRate');
-      const maturityDate = maturity.value;
       if (!maturityDate) return validate('invalidDate');
       if (maturityDate < startDate) return validate('invalidMaturity');
       setError(undefined);
@@ -72,13 +70,13 @@ export function AccountForm({ lang, today, disabled, onSubmit }: Props & { today
       onChange={setCurrency} disabled={disabled} testID="finance-account-currency" />
     <FinanceField title={t.opening + ' (' + currency + ')'} value={opening.text} onChangeText={opening.setText} editable={!disabled}
       keyboardType="numbers-and-punctuation" maxLength={30} testID="finance-account-opening" />
-    <FinanceField title={t.startDate} hint={t.dateHint} value={start.text} onChangeText={start.setText} editable={!disabled}
-      keyboardType="numbers-and-punctuation" maxLength={10} testID="finance-account-date" />
+    <FinanceDateField title={t.startDate} lang={lang} today={today} value={startDate} onChange={setStart} max={today}
+      disabled={disabled} testID="finance-account-date" />
     {kind === 'deposit' && <>
       <FinanceField title={t.rate} value={rate.text} onChangeText={rate.setText} editable={!disabled} keyboardType="numbers-and-punctuation"
         maxLength={8} testID="finance-account-rate" />
-      <FinanceField title={t.maturity} hint={t.dateHint} value={maturity.text} onChangeText={maturity.setText} editable={!disabled}
-        keyboardType="numbers-and-punctuation" maxLength={10} testID="finance-account-maturity" />
+      <FinanceDateField title={t.maturity} lang={lang} today={today} value={maturityDate} onChange={setMaturityDate}
+        min={startDate} disabled={disabled} testID="finance-account-maturity" />
     </>}
     {error && <FinanceAlert>{t[error]}</FinanceAlert>}
     <FinanceButton title={t.submitAccount} onPress={submit} primary disabled={disabled} testID="finance-submit" />
@@ -103,12 +101,15 @@ export function TransactionForm({ lang, today, disabled, onSubmit, accounts, cat
   ) : '', amountInMinorUnits, formatAmount);
   const received = useLocalizedInput(lang, initial?.type === 'transfer'
     ? formatAmount(initial.toAmountMinor, lang) : '', amountInMinorUnits, formatAmount);
-  const date = useLocalizedInput(lang, formatFinancialDate(initial?.date ?? today, lang), financialDate, formatFinancialDate);
+  const [date, setDate] = useState<string>();
+  const operationDate = date ?? initial?.date ?? today;
   const [comment, setComment] = useState(initial?.comment ?? '');
   const [error, setError] = useState<FinanceCopyKey>();
   const account = accounts.find((entry) => entry.accountId === accountId);
   const isTransfer = kind === 'transfer';
   const destination = isTransfer ? accounts.find((entry) => entry.accountId === toAccountId) : undefined;
+  const earliestDate = destination && (!account || destination.startDate > account.startDate)
+    ? destination.startDate : account?.startDate;
   const crossCurrency = !!account && !!destination && account.currency !== destination.currency;
   const rate = crossCurrency && amount.value && received.value
     ? formatTransferRate(amount.value, received.value, account.currency, destination.currency, lang) : undefined;
@@ -126,8 +127,6 @@ export function TransactionForm({ lang, today, disabled, onSubmit, accounts, cat
     const amountMinor = amount.value;
     if (amountMinor === undefined) return setError('invalidAmount');
     if (amountMinor === '0' || amountMinor.startsWith('-')) return setError('positiveAmount');
-    const operationDate = date.value;
-    if (!operationDate) return setError('invalidDate');
     if (operationDate < account.startDate) return setError('invalidStart');
     const fields = { date: operationDate, ...(comment && { comment }) };
     if (kind === 'transfer') {
@@ -164,8 +163,8 @@ export function TransactionForm({ lang, today, disabled, onSubmit, accounts, cat
       <Text style={uiStyles.meta}>{t.transferRate}</Text>
       <Text style={uiStyles.value} testID="finance-transfer-rate">{rate}</Text>
     </View>}
-    <FinanceField title={t.date} hint={t.dateHint} value={date.text} onChangeText={date.setText} editable={!disabled}
-      keyboardType="numbers-and-punctuation" maxLength={10} testID={prefix + '-date'} />
+    <FinanceDateField title={t.date} lang={lang} today={today} value={operationDate} onChange={setDate}
+      min={earliestDate} disabled={disabled} testID={prefix + '-date'} />
     {!isTransfer && <Choice title={t.category} value={categoryId} onChange={setCategoryId} disabled={disabled}
       options={categoryOptions.map((category) => ({ id: category.id, label: lang === 'ru' ? category.nameRu : category.nameEn }))}
       testID={prefix + '-category'} />}

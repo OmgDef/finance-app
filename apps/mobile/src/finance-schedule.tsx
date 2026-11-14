@@ -8,10 +8,11 @@ import { apiErrorCode } from './finance-commands';
 import type { FinanceAccess, FinanceDraft } from './finance-commands';
 import { financeCopy } from './finance-copy';
 import { addFinancialDays, formatFinancialDate, formatMoney, formatProfileMoment } from './finance-format';
+import { FinanceIcon } from './finance-icon';
 import { scheduleCopy } from './finance-schedule-copy';
 import { ScheduleEditor } from './finance-schedule-editor';
 import { ScheduleReplacement } from './finance-schedule-replacement';
-import { FinanceAlert, FinanceButton, FinanceField, palette, styles } from './finance-ui';
+import { Choice, FinanceAlert, FinanceButton, FinanceField, palette, styles } from './finance-ui';
 
 export type SchedulePage = {
   name: 'schedule';
@@ -90,6 +91,7 @@ export function ScheduleScreen({ page, access, accounts, categories, lang, disab
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const [refreshVersion, setRefreshVersion] = useState(0);
+  const [accountFilterOpen, setAccountFilterOpen] = useState(false);
   const reading = useRef(0);
   const writing = useRef(false);
   const mounted = useRef(false);
@@ -228,7 +230,8 @@ export function ScheduleScreen({ page, access, accounts, categories, lang, disab
   const canCreate = accounts?.some((item) => !item.archived && (!accountId || item.accountId === accountId));
 
   return <View style={layout.section} testID="schedule-screen">
-    {selectedAccount && <Text style={styles.meta}>{editor === 'replace' && t.source + ' · '}{selectedAccount.name}</Text>}
+    {selectedAccount && (editing || ruleId) &&
+      <Text style={styles.meta}>{editor === 'replace' && t.source + ' · '}{selectedAccount.name}</Text>}
     {busy && !active && <ActivityIndicator color={palette.accent} accessibilityLabel={f.loading} />}
     {problem && <View style={layout.group}>
       <FinanceAlert>{errorLabel}</FinanceAlert>
@@ -249,6 +252,24 @@ export function ScheduleScreen({ page, access, accounts, categories, lang, disab
       : skipTarget ? <ScheduleSkipForm key={skipTarget.ruleId + skipDate} entry={skipTarget} lang={lang}
         disabled={disabled || busy || saving || !!readError} onSubmit={onSubmit} /> : active && <FinanceAlert>{t.skipChanged}</FinanceAlert>)}
     {!editing && !ruleId && <>
+      {!!accounts?.length && <View style={layout.section}>
+        <Pressable accessibilityRole="button" accessibilityState={{ expanded: accountFilterOpen, disabled: saving }}
+          accessibilityLabel={f.account + ', ' + (selectedAccount?.name ?? (accountId ? t.unavailable : t.allAccounts))}
+          testID="schedule-account-filter" disabled={saving} onPress={() => setAccountFilterOpen((open) => !open)}
+          style={[styles.surface, layout.accountFilter]}>
+          <Text style={[styles.title, layout.accountFilterTitle]}>
+            {f.account} · {selectedAccount?.name ?? (accountId ? t.unavailable : t.allAccounts)}
+          </Text>
+          <FinanceIcon name={accountFilterOpen ? 'chevron-down' : 'chevron'} color={palette.muted} size={15} />
+        </Pressable>
+        {accountFilterOpen && <Choice title={t.filterByAccount} value={accountId ?? 'all'} testID="schedule-filter-account"
+          options={[{ id: 'all', label: t.allAccounts }, ...accounts.map((account) => ({
+            id: account.accountId, label: account.name + ' · ' + (account.archived ? f.archivedAccount : account.currency),
+          }))]} onChange={(id) => {
+            setAccountFilterOpen(false);
+            onPage({ ...page, accountId: id === 'all' ? null : id });
+          }} />}
+      </View>}
       {canCreate && <FinanceButton title={t.newRule} onPress={() => show({ ...page, editor: 'create' })} primary
         disabled={disabled || saving || busy} testID="schedule-create" />}
       {accounts && !accounts.length && <Text style={styles.meta}>{t.noAccount}</Text>}
@@ -361,6 +382,8 @@ export function scheduleOffset(today: string, date: string) {
 }
 
 const layout = StyleSheet.create({
+  accountFilter: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 48, padding: 12 },
+  accountFilterTitle: { flex: 1 },
   section: { gap: 16 },
   group: { gap: 8 },
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
