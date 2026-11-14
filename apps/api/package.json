@@ -6,6 +6,7 @@
   "scripts": { "start": "node src/server.ts", "worker": "node src/worker.ts" },
   "dependencies": {
     "@teta/contracts": "0.1.0",
+    "@xmldom/xmldom": "0.8.15",
     "drizzle-orm": "0.45.4",
     "fastify": "5.12.8",
     "mysql2": "3.24.6"

@@ -22,7 +22,7 @@ export default function Settings() {
     wasFocused.current = focused;
   }, [focused]);
 
-  return <SafeAreaView edges={['left', 'right']} style={{ flex: 1 }}>
+  return <SafeAreaView edges={['top', 'left', 'right']} style={{ flex: 1 }}>
     <KeyboardAwareScrollView contentInsetAdjustmentBehavior="automatic" bottomOffset={12}
       keyboardDismissMode="on-drag" keyboardShouldPersistTaps="handled" contentContainerStyle={styles.page}>
       <AccountSettingsLink lang={lang} onPress={() => go({ name: 'accountSettings' })} />

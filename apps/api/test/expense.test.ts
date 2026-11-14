@@ -761,6 +761,21 @@ test('Finance API against migrated MySQL', async (t) => {
     assert.deepEqual(new Set(await list()), new Set([cardA, cardB]));
     await summary('200000');
 
+    const third = await send(app, 'createAccountCard', { name: 'Третья', appearance: '#ABCDEF', lastFour: '9876' }, session, accountId);
+    assert.equal(third.statusCode, 200, third.body);
+    const thirdCard = third.json<Result<'createAccountCard'>>();
+    const previews = async (ownerSession: string) => {
+      const response = await send(app, 'listAccounts', undefined, ownerSession);
+      assert.equal(response.statusCode, 200, response.body);
+      return response.json<Result<'listAccounts'>>().cardPreviews;
+    };
+    assert.deepEqual(await previews(session), [{ accountId, count: 3,
+      cards: [cardA, cardB, thirdCard].sort((a, b) => a.cardId.localeCompare(b.cardId)).slice(0, 2)
+        .map(({ cardId, name, appearance, lastFour }) => ({ cardId, name, appearance, lastFour })),
+    }]);
+    assert.deepEqual(await previews(otherOwner.session), []);
+    assert.equal((await send(app, 'deleteAccountCard', undefined, session, accountId, thirdCard.cardId)).statusCode, 200);
+
     const payment = await send(app, 'recordTransaction', expense, session);
     assert.equal(payment.statusCode, 200, payment.body);
     const updatedBalance = { balanceMinor: '90000' };
@@ -2914,6 +2929,38 @@ test('Finance API against migrated MySQL', async (t) => {
     ]);
   });
 
+  await t.test('Next payment selects the first unsettled outgoing occurrence, including distant dates', async () => {
+    const { session, accountId } = await fixture();
+    const other = await fixture();
+    const read = async () => {
+      const response = await send(app, 'getNextPayment', undefined, session);
+      assert.equal(response.statusCode, 200, response.body);
+      return response.json<Result<'getNextPayment'>>().payment;
+    };
+    const create = async (date: string, kind: 'expense' | 'income', comment?: string) => {
+      const response = await send(app, 'createScheduleRule', {
+        ...scheduleInput(accountId, date), kind, frequency: 'once', comment,
+        categoryId: kind === 'income' ? 'salary' : 'groceries',
+      }, session);
+      assert.equal(response.statusCode, 200, response.body);
+      return response.json<Result<'createScheduleRule'>>().ruleId;
+    };
+
+    await scheduleRule(other.accountId, 'once', '2027-02-02');
+    await create('2027-02-03', 'income');
+    const skipped = await create('2027-02-01', 'expense');
+    const skip = await send(app, 'skipScheduleOccurrence', { reason: 'Already covered',
+      idempotencyKey: '1.' + token() }, session, skipped, '2027-02-01');
+    assert.equal(skip.statusCode, 200, skip.body);
+    assert.equal(await read(), null);
+    const ruleId = await create('2028-02-01', 'expense', 'Annual insurance');
+    const payment = await read();
+    assert.equal(payment?.ruleId, ruleId);
+    assert.equal(payment?.date, '2028-02-01');
+    assert.equal(payment?.comment, 'Annual insurance');
+    assert.equal(payment?.amountMinor, '10000');
+  });
+
   await t.test('Statistics defaults to the profile month and validates access and period bounds', async (t) => {
     const previousNow = now;
     t.after(() => { now = previousNow; });
@@ -3003,6 +3050,13 @@ test('Finance API against migrated MySQL', async (t) => {
       { currency: 'EUR', incomeMinor: '12550', expenseMinor: '23000' },
       { currency: 'USD', incomeMinor: '0', expenseMinor: '2100' },
     ]);
+    assert.equal(all.weeks, undefined);
+    const weekly = await readStatistics(session, { ...period, byWeek: 'true' });
+    assert.deepEqual(weekly.weeks, [
+      { weekIndex: 0, currency: 'EUR', incomeMinor: '0', expenseMinor: '13000' },
+      { weekIndex: 0, currency: 'USD', incomeMinor: '0', expenseMinor: '2100' },
+      { weekIndex: 3, currency: 'EUR', incomeMinor: '12550', expenseMinor: '10000' },
+    ]);
     assert.deepEqual(all.categories, [
       { currency: 'EUR', categoryId: 'groceries', amountMinor: '20000' },
       { currency: 'EUR', categoryId: 'dining', amountMinor: '3000' },
@@ -3053,7 +3107,7 @@ test('Finance API against migrated MySQL', async (t) => {
       const card = await send(app, 'createAccountCard', { name, appearance: '#123456' }, session, accountId);
       assert.equal(card.statusCode, 200, card.body);
     }
-    const filter = { fromDate: date, throughDate: date, accountId, categoryId: 'groceries' };
+    const filter = { fromDate: date, throughDate: date, accountId, categoryId: 'groceries', byWeek: 'true' };
     const first = await readStatistics(session, filter);
     assert.equal(first.entries.length, 50);
     assert.ok(first.next);
@@ -3064,6 +3118,8 @@ test('Finance API against migrated MySQL', async (t) => {
     const total = sample.reduce((sum, value) => sum + value, 0n).toString();
     assert.deepEqual(first.totals, [{ currency: 'EUR', incomeMinor: '0', expenseMinor: total }]);
     assert.deepEqual(first.categories, [{ currency: 'EUR', categoryId: 'groceries', amountMinor: total }]);
+    assert.deepEqual(first.weeks, [{ weekIndex: 0, currency: 'EUR', incomeMinor: '0', expenseMinor: total }]);
+    assert.deepEqual(second.weeks, first.weeks);
     assert.deepEqual(second.totals, first.totals);
     assert.deepEqual(second.categories, first.categories);
     expectError(await statistics(session, { fromDate: '2027-01-01', throughDate: '2027-01-31', before: first.next }),

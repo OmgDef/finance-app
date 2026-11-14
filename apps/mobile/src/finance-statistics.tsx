@@ -20,6 +20,7 @@ type ExpenseCategory = Report['categories'][number];
 type Account = Result<'listAccounts'>['accounts'][number];
 type Category = Result<'listCategories'>['categories'][number];
 type Filters = Omit<StatisticsQuery, 'before'>;
+export type StatisticsPreset = Pick<Report, 'fromDate' | 'throughDate'> & { currency: NonNullable<Filters['currency']> };
 type Drill = Pick<ExpenseCategory, 'currency' | 'categoryId'> & Pick<Report, 'fromDate' | 'throughDate'>;
 type Snapshot = { scope: string; report?: Report; busy: boolean; error?: string };
 
@@ -32,8 +33,8 @@ function queryFor({ fromDate, throughDate, accountId, categoryId, type, currency
   return query;
 }
 
-export function useStatistics(access: FinanceAccess, enabled: boolean, dataRevision: number) {
-  const [filters, setFilters] = useState<Filters>({});
+export function useStatistics(access: FinanceAccess, enabled: boolean, dataRevision: number, preset?: StatisticsPreset) {
+  const [filters, setFilters] = useState<Filters>(preset ?? {});
   const [drill, setDrill] = useState<Drill>();
   const [revision, setRevision] = useState(0);
   const [snapshot, setSnapshot] = useState<Snapshot>();

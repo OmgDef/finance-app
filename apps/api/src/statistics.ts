@@ -6,7 +6,7 @@ import { AccessError } from './errors.ts';
 import { readProfileCalendar } from './profile.ts';
 
 type Statistics = Result<'getStatistics'>;
-type Aggregates = Pick<Statistics, 'totals' | 'categories' | 'entries'>;
+type Aggregates = Pick<Required<Statistics>, 'totals' | 'categories' | 'entries' | 'weeks'>;
 
 const pageSize = 50;
 const compareText = (a: string, b: string) => a === b ? 0 : a < b ? -1 : 1;
@@ -37,7 +37,7 @@ async function reportPeriod(tx: Tx, userId: string, now: number, query: Statisti
 export async function getStatistics(tx: Tx, userId: string, now: number, query: StatisticsQuery): Promise<Statistics> {
   const period = await reportPeriod(tx, userId, now, query);
   const { fromDate, throughDate } = period;
-  const { accountId, categoryId, type, currency, before } = query;
+  const { accountId, categoryId, type, currency, before, byWeek } = query;
   const [beforeDate, beforeId] = before?.split('.') ?? [];
   if (beforeDate !== undefined) {
     parseDate(beforeDate);
@@ -66,7 +66,12 @@ export async function getStatistics(tx: Tx, userId: string, now: number, query: 
     ), categories AS (
       SELECT currency, categoryId, -SUM(amountMinor) AS amountMinor
       FROM posted WHERE type = 'expense' GROUP BY currency, categoryId
-    ), page AS (
+    ) ${byWeek ? sql`, weeks AS (
+      SELECT FLOOR(DATEDIFF(date, ${fromDate}) / 7) AS weekIndex, currency,
+        SUM(CASE WHEN type = 'income' THEN amountMinor ELSE 0 END) AS incomeMinor,
+        -SUM(CASE WHEN type = 'expense' THEN amountMinor ELSE 0 END) AS expenseMinor
+      FROM posted GROUP BY weekIndex, currency
+    )` : sql``}, page AS (
       SELECT * FROM posted
       ${beforeDate === undefined ? sql`` : sql`WHERE date < ${beforeDate} OR (date = ${beforeDate} AND transactionId < ${beforeId})`}
       ORDER BY date DESC, transactionId DESC LIMIT ${pageSize + 1}
@@ -77,6 +82,8 @@ export async function getStatistics(tx: Tx, userId: string, now: number, query: 
         'incomeMinor', CAST(incomeMinor AS CHAR), 'expenseMinor', CAST(expenseMinor AS CHAR))) FROM totals) AS totals,
       (SELECT JSON_ARRAYAGG(JSON_OBJECT('currency', currency, 'categoryId', categoryId,
         'amountMinor', CAST(amountMinor AS CHAR))) FROM categories) AS categories,
+      ${byWeek ? sql`(SELECT JSON_ARRAYAGG(JSON_OBJECT('weekIndex', CAST(weekIndex AS UNSIGNED), 'currency', currency,
+        'incomeMinor', CAST(incomeMinor AS CHAR), 'expenseMinor', CAST(expenseMinor AS CHAR))) FROM weeks)` : sql`NULL`} AS weeks,
       (SELECT JSON_ARRAYAGG(JSON_OBJECT('transactionId', transactionId, 'transactionVersion', transactionVersion,
         'date', CAST(date AS CHAR), 'type', type, 'accountId', accountId, 'currency', currency,
         'categoryId', categoryId, 'comment', comment, 'amountMinor', CAST(amountMinor AS CHAR))) FROM page) AS entries`);
@@ -96,5 +103,8 @@ export async function getStatistics(tx: Tx, userId: string, now: number, query: 
   page.sort((a, b) => compareText(b.date, a.date) || compareText(b.transactionId, a.transactionId));
   const entries = page.slice(0, pageSize);
   const last = entries.at(-1);
-  return { ...period, totals, categories, entries, next: last && page.length > pageSize ? `${last.date}.${last.transactionId}` : null };
+  const weeks = byWeek ? (report.weeks ?? []).sort((a, b) =>
+    a.weekIndex - b.weekIndex || a.currency.localeCompare(b.currency)) : undefined;
+  return { ...period, totals, categories, ...(weeks && { weeks }), entries,
+    next: last && page.length > pageSize ? `${last.date}.${last.transactionId}` : null };
 }

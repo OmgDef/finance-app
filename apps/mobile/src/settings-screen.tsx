@@ -13,7 +13,7 @@ const languageNames = { ru: 'Русский', en: 'English' } as const;
 
 export function AccountSettingsLink({ lang, onPress }: { lang: Language; onPress: () => void }) {
   return <View style={styles.surface}>
-    <SettingRow icon="wallet" title={financeCopy[lang].accounts} onPress={onPress} testID="finance-account-settings" />
+    <SettingRow icon="wallet" title={financeCopy[lang].manageAccounts} onPress={onPress} testID="finance-account-settings" />
   </View>;
 }
 

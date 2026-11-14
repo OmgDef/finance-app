@@ -13,9 +13,10 @@ import { token } from './crypto.ts';
 import { one } from './db.ts';
 import type { Db } from './db.ts';
 import { AccessError, sessionExpired } from './errors.ts';
+import { exchangeRates } from './exchange-rates.ts';
 import {
   changeTransaction, createAccount, createAccountCard, deleteAccountCard, getAccountBalance, getCurrencySummary,
-  listAccountCards, listAccounts, listBalanceAdjustments, listCategories, listTransactionVersions, previewBalanceAdjustment,
+  listAccountCards, listAccounts, listBalanceAdjustments, listCategories, listMobileAccounts, listTransactionVersions, previewBalanceAdjustment,
   previewTransactionChange, reconcileAccountBalance, recordTransaction, renameAccount, setAccountArchived, updateAccountCard,
   updateAccountStartDate,
 } from './finance.ts';
@@ -23,7 +24,7 @@ import { mobileAccess } from './mobile.ts';
 import { readProfileCalendar } from './profile.ts';
 import { minute } from './rates.ts';
 import {
-  changeScheduleRule, createScheduleRule, getScheduleRule, listScheduleOccurrences, listScheduleRules,
+  changeScheduleRule, createScheduleRule, getNextPayment, getScheduleRule, listScheduleOccurrences, listScheduleRules,
   previewScheduleRuleReplacement, replaceScheduleRule, retryScheduleOccurrence, skipScheduleOccurrence,
 } from './schedule.ts';
 import { getStatistics } from './statistics.ts';
@@ -50,6 +51,7 @@ export function buildApp(config: Config, db: Db, clock = Date.now, logger = fals
     bodyLimit: 8192, ajv: { customOptions: { coerceTypes: false, removeAdditional: false } },
   });
   const mobile = mobileAccess(db, config.accessKey, clock);
+  const loadExchangeRates = exchangeRates(clock);
   const admin = adminAccess(db, config, clock);
   const apiOrigin = new URL(config.apiOrigin);
   const adminOrigin = new URL(config.adminOrigin);
@@ -141,7 +143,7 @@ export function buildApp(config: Config, db: Db, clock = Date.now, logger = fals
   add('disableBiometrics', async (request) => { await mobile.setBiometrics(bearer(request)); return ok; });
   add('createAccount', async (request) =>
     createAccount(mobileCommandAccess(request), config.recoveryVersion, request.body));
-  add('listAccounts', async (request) => mobile.withSession(bearer(request), (tx, user) => listAccounts(tx, user.id)));
+  add('listAccounts', async (request) => mobile.withSession(bearer(request), (tx, user) => listMobileAccounts(tx, user.id)));
   add('getCurrencySummary', async (request) => mobile.withSession(bearer(request), (tx, user) =>
     getCurrencySummary(tx, user.id)));
   add('getAccountBalance', async (request) => mobile.withSession(bearer(request), (tx, user) =>
@@ -154,6 +156,10 @@ export function buildApp(config: Config, db: Db, clock = Date.now, logger = fals
   add('listCategories', async (request) => mobile.withSession(bearer(request), listCategories));
   add('getStatistics', async (request) => mobile.withSession(bearer(request), (tx, user, _device, now) =>
     getStatistics(tx, user.id, now, request.query as StatisticsQuery)));
+  add('getExchangeRates', async (request) => {
+    await mobile.withSession(bearer(request), async () => {});
+    return loadExchangeRates();
+  });
   add('archiveAccount', async (request) => setAccountArchived(mobileCommandAccess(request), request.params.accountId, true));
   add('restoreAccount', async (request) => setAccountArchived(mobileCommandAccess(request), request.params.accountId, false));
   add('listBalanceAdjustments', async (request) => mobile.withSession(bearer(request), (tx, user) =>
@@ -194,6 +200,8 @@ export function buildApp(config: Config, db: Db, clock = Date.now, logger = fals
     const { fromDate, throughDate, ...filter } = request.query as OccurrenceQuery;
     return listScheduleOccurrences(tx, user.id, { fromDate, throughDate, asOf: now }, filter);
   }));
+  add('getNextPayment', async (request) => mobile.withSession(bearer(request), (tx, user, _device, now) =>
+    getNextPayment(tx, user.id, now)));
   add('skipScheduleOccurrence', async (request) =>
     skipScheduleOccurrence(mobileCommandAccess(request), config.recoveryVersion, request.params, request.body));
   add('commandStatus', async (request) =>

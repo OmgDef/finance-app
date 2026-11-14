@@ -181,6 +181,38 @@ export async function listScheduleOccurrences(tx: Tx, userId: string, window: Sc
   return { occurrences: occurrences.sort(compareOccurrences) };
 }
 
+export async function getNextPayment(tx: Tx, userId: string, now: number): Promise<Result<'getNextPayment'>> {
+  const { today } = await readProfileCalendar(tx, userId, now);
+  const window = { fromDate: today, throughDate: lastStoredDate, asOf: now };
+  const calendars = await readCalendars(tx, userId, now,
+    sql`r.kind = 'expense' AND r.recovery_held = FALSE AND a.archived = FALSE`, window);
+  let payment: Result<'getNextPayment'>['payment'] = null;
+  for (const calendar of calendars) {
+    if (calendar.processedThrough === lastStoredDate) continue;
+    const lastEffectiveAt = calendar.rule.versions.reduce((latest, version) => Math.max(latest, version.effectiveAt), 0);
+    const throughDate: string = payment?.date ?? window.throughDate;
+    const fromDate = calendar.processedThrough !== null && calendar.processedThrough >= today
+      ? Temporal.PlainDate.from(calendar.processedThrough).add({ days: 1 }).toString() : today;
+    if (fromDate > throughDate) continue;
+    for (const date of calculateScheduleDates(calendar.rule, calendar.zones, { ...window, fromDate, throughDate })) {
+      if (date.status === 'paused') {
+        if (date.dueAt >= lastEffectiveAt) break;
+        continue;
+      }
+      if (calendar.outcomes.has(date.date)) continue;
+      const failure = date.dueAt <= now ? calendar.failures.find((failure) => failure.date === date.date) : undefined;
+      const occurrence = { ...date, currency: calendar.currency };
+      const candidate = failure ? { ...occurrence, attempts: failure.attempts, errorCode: failure.errorCode,
+        failureRevision: failure.failureRevision,
+        status: failure.nextAttemptAt === null ? 'needs_intervention' as const : 'retrying' as const,
+        nextAttemptAt: failure.nextAttemptAt ?? undefined } : occurrence;
+      if (!payment || compareOccurrences(candidate, payment) < 0) payment = candidate;
+      break;
+    }
+  }
+  return { payment };
+}
+
 async function validateRuleAmountAndCategory(tx: Tx, kind: RuleResult['kind'], amountMinor?: string, categoryId?: string) {
   if (amountMinor !== undefined && (BigInt(amountMinor) <= 0n || BigInt(amountMinor) > maxAmountMinor)) {
     throw new AccessError(400, 'INVALID_REQUEST');

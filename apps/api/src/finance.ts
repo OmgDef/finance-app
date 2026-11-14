@@ -38,6 +38,7 @@ type BalanceAdjustmentRow = Omit<BalanceAdjustment, 'createdAt' | 'skippedDates'
 type CurrencyBalance = Result<'getCurrencySummary'>['balances'][number];
 type AccountCard = Result<'createAccountCard'>;
 type CardDetails = Pick<AccountCard, 'cardId' | 'name' | 'appearance' | 'lastFour'>;
+type CardPreview = Result<'listAccounts'>['cardPreviews'][number];
 type CardParams = Params<'updateAccountCard'>;
 const maxMinor = 9223372036854775807n;
 const minMinor = -9223372036854775808n;
@@ -76,9 +77,30 @@ export async function getAccountBalance(tx: Tx, userId: string, accountId: strin
   return formatAccountBalance(account);
 }
 
-export async function listAccounts(tx: Tx, userId: string): Promise<Result<'listAccounts'>> {
+export async function listAccounts(tx: Tx, userId: string) {
   const accounts = await rows<AccountRow>(tx, sql`${accountBalances} WHERE a.user_id = ${userId} ORDER BY a.archived, a.name, a.id`);
   return { accounts: accounts.map(formatAccountBalance) };
+}
+
+export async function listMobileAccounts(tx: Tx, userId: string): Promise<Result<'listAccounts'>> {
+  const { accounts } = await listAccounts(tx, userId);
+  const cards = await rows<CardDetails & { accountId: string; cardCount: number }>(tx, sql`
+    WITH ranked AS (
+      SELECT c.account_id AS accountId, c.id AS cardId, c.name, c.appearance, c.last_four AS lastFour,
+        COUNT(*) OVER (PARTITION BY c.account_id) AS cardCount,
+        ROW_NUMBER() OVER (PARTITION BY c.account_id ORDER BY c.id) AS cardPosition
+      FROM account_cards c JOIN accounts a ON a.id = c.account_id
+      WHERE a.user_id = ${userId} AND a.archived = FALSE
+    )
+    SELECT accountId, cardId, name, appearance, lastFour, cardCount
+    FROM ranked WHERE cardPosition <= 2 ORDER BY accountId, cardPosition`);
+  const previews = new Map<string, CardPreview>();
+  for (const { accountId, cardCount, ...card } of cards) {
+    const preview = previews.get(accountId);
+    if (preview) preview.cards.push(card);
+    else previews.set(accountId, { accountId, count: cardCount, cards: [card] });
+  }
+  return { accounts, cardPreviews: [...previews.values()] };
 }
 
 export async function listCategories(tx: Tx): Promise<Result<'listCategories'>> {

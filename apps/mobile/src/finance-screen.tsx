@@ -3,7 +3,7 @@ import type { ComponentRef, ReactNode } from 'react';
 import { Redirect, Stack, useGlobalSearchParams, useIsFocused, useLocalSearchParams, usePathname, usePreventRemove, useRouter } from 'expo-router';
 import {
   ActivityIndicator, Alert, Platform, Pressable, RefreshControl,
-  StyleSheet, Text, View, useWindowDimensions,
+  StyleSheet, Text, View,
 } from 'react-native';
 import { KeyboardAwareScrollView, KeyboardController, KeyboardToolbar } from 'react-native-keyboard-controller';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -17,8 +17,8 @@ import { apiErrorCode, useFinanceCommand } from './finance-commands';
 import type { CommandResult, FinanceAccess, FinanceCommand, TransactionFields } from './finance-commands';
 import { financeCopy } from './finance-copy';
 import type { FinanceCopyKey } from './finance-copy';
-import { currencies, formatAmount, formatFinancialDate, formatMoney, formatProfileMoment, formatRate } from './finance-format';
-import type { Currency } from './finance-format';
+import { BalanceCard, CashFlowCard, ExchangeRatesCard, NextPaymentCard, OverviewAccountCard } from './finance-dashboard';
+import { addFinancialDays, formatAmount, formatFinancialDate, formatMoney, formatProfileMoment, formatRate } from './finance-format';
 import { AccountForm, TransactionForm } from './finance-forms';
 import { FinanceIcon } from './finance-icon';
 import { PaymentsScreen } from './finance-payments';
@@ -28,6 +28,7 @@ import { financeHref, financePage, financePath, routeParameter } from './finance
 import type { FinancePage, FinanceRoute } from './finance-navigation';
 import { scheduleCopy } from './finance-schedule-copy';
 import { StatisticsScreen, useStatistics } from './finance-statistics';
+import type { StatisticsPreset } from './finance-statistics';
 import { appTabs } from './finance-tabs';
 import type { FinanceTab } from './finance-tabs';
 import { revisionFields, TransactionVersions } from './finance-transaction';
@@ -71,6 +72,7 @@ function useWorkspaceModel(access: FinanceAccess, lang: Language) {
   const location = useRef({ pathname, accountId: routeParameter(accountId) });
   location.current = { pathname, accountId: routeParameter(accountId) };
   const [accounts, setAccounts] = useState<Account[]>();
+  const [cardPreviews, setCardPreviews] = useState<Result<'listAccounts'>['cardPreviews']>([]);
   const [categories, setCategories] = useState<Category[]>();
   const [listError, setListError] = useState('');
   const [categoryError, setCategoryError] = useState('');
@@ -94,6 +96,7 @@ function useWorkspaceModel(access: FinanceAccess, lang: Language) {
       const result = await request('listAccounts', { token: access.token });
       if (current()) {
         setAccounts(result.accounts);
+        setCardPreviews(result.cardPreviews ?? []);
         return result.accounts;
       }
     } catch (error) {
@@ -198,10 +201,9 @@ function useWorkspaceModel(access: FinanceAccess, lang: Language) {
   }, []);
 
   const blocked = command.busy || command.reading || command.pending !== null;
-  return { access, lang, blocked, accounts, categories, activeAccounts, archivedAccounts, listError, categoryError, refreshing,
+  return { access, lang, blocked, accounts, cardPreviews, categories, activeAccounts, archivedAccounts, listError, categoryError, refreshing,
     receipt: receipt?.path === pathname ? receipt : undefined, setReceipt, revision, command,
     accountNotice, setAccountNotice, loadAccounts, loadCategories, updateAccount, invalidate, go,
-    openNewAccount: () => go({ name: 'addAccount' }),
   };
 }
 
@@ -218,8 +220,8 @@ export function useFinanceWorkspace() {
   return workspace;
 }
 
-export function FinanceTabScreen({ tab }: { tab: Exclude<FinanceTab, 'settings'> }) {
-  return <FinanceScreen page={{ name: tab }} />;
+export function FinanceTabScreen({ tab, statisticsPreset }: { tab: Exclude<FinanceTab, 'settings'>; statisticsPreset?: StatisticsPreset }) {
+  return <FinanceScreen page={{ name: tab }} statisticsPreset={statisticsPreset} />;
 }
 
 export function FinanceRouteScreen({ route }: { route: FinanceRoute }) {
@@ -229,7 +231,7 @@ export function FinanceRouteScreen({ route }: { route: FinanceRoute }) {
 }
 
 function useFinanceRead<T>(key: string | undefined, revision: number, access: FinanceAccess,
-  read: (key: string, before?: string) => Promise<T>) {
+  read: (key: string, before?: string) => Promise<T>, enabled = true) {
   const [state, setState] = useState<{ key: string; data?: T; error?: string; busy: boolean }>();
   const latest = useRef(0);
   const inFlight = useRef<number | undefined>(undefined);
@@ -254,16 +256,16 @@ function useFinanceRead<T>(key: string | undefined, revision: number, access: Fi
   }
 
   useEffect(() => {
-    void load();
+    if (enabled) void load();
     return () => { latest.current += 1; };
-  }, [key, revision]);
+  }, [key, revision, enabled]);
 
   return { data: visible?.data, error: visible?.error, busy: !!key && (visible?.busy ?? true), load };
 }
 
-function FinanceScreen({ page, inStack = false }: { page: Page; inStack?: boolean }) {
+function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page; inStack?: boolean; statisticsPreset?: StatisticsPreset }) {
   const { timeZoneSuggestion } = useAccessSession();
-  const { access, lang, blocked, accounts, categories, activeAccounts, archivedAccounts, listError, categoryError,
+  const { access, lang, blocked, accounts, cardPreviews, categories, activeAccounts, archivedAccounts, listError, categoryError,
     refreshing, receipt, setReceipt, revision, command, accountNotice, setAccountNotice,
     loadAccounts, loadCategories, updateAccount, invalidate, go,
   } = useFinanceWorkspace();
@@ -274,11 +276,27 @@ function FinanceScreen({ page, inStack = false }: { page: Page; inStack?: boolea
   const [paymentsRefresh, setPaymentsRefresh] = useState(0);
   const t = financeCopy[lang];
   const s = scheduleCopy[lang];
-  const { width, fontScale } = useWindowDimensions();
   const focused = useIsFocused();
   const wasFocused = useRef(false);
   if (focused) wasFocused.current = true;
-  const statistics = useStatistics(access, page.name === 'statistics' && wasFocused.current, revision);
+  const statistics = useStatistics(access, page.name === 'statistics' && wasFocused.current, revision, statisticsPreset);
+  const showOverview = page.name === 'products';
+  const previewsByAccount = new Map(cardPreviews.map((preview) => [preview.accountId, preview]));
+  const overviewOpened = useRef(false);
+  useEffect(() => {
+    if (showOverview && focused) {
+      if (overviewOpened.current) void loadAccounts();
+      overviewOpened.current = true;
+    }
+  }, [showOverview, focused]);
+  const { today, timeZone } = access.profile;
+  const cashFlow = useFinanceRead(showOverview ? today : undefined, revision, access, (throughDate) =>
+    request('getStatistics', { token: access.token,
+      query: new URLSearchParams({ throughDate, fromDate: addFinancialDays(throughDate, -29), byWeek: 'true' }) }), focused);
+  const exchangeRates = useFinanceRead(showOverview ? 'rates' : undefined, 0, access, () =>
+    request('getExchangeRates', { token: access.token }), focused);
+  const nextPayment = useFinanceRead(showOverview ? today + ':' + timeZone : undefined, revision, access, () =>
+    request('getNextPayment', { token: access.token }), focused);
   const scroll = useRef<ComponentRef<typeof KeyboardAwareScrollView>>(null);
   const accountId = 'accountId' in page ? page.accountId : null;
   const account = accountId ? accounts?.find((entry) => entry.accountId === accountId) : undefined;
@@ -296,14 +314,6 @@ function FinanceScreen({ page, inStack = false }: { page: Page; inStack?: boolea
     request('listTransactionVersions', { token: access.token, params: { transactionId } }));
   const showingSupport = page.name === 'support';
   const financeTab = page.name === 'products' || page.name === 'payments' || page.name === 'statistics';
-  const balanceByCurrency = new Map<Currency, bigint>();
-  for (const entry of activeAccounts) {
-    balanceByCurrency.set(entry.currency, (balanceByCurrency.get(entry.currency) ?? 0n) + BigInt(entry.balanceMinor));
-  }
-  const totals = currencies.map((currency) => ({
-    currency, amount: formatAmount(String(balanceByCurrency.get(currency) ?? 0n), lang),
-  }));
-  const useBalanceRows = Math.min(width, 540) / fontScale < 355 || totals.some(({ amount }) => amount.length > 11);
   const historyTitles = {
     opening: t.opening, adjustment: t.adjustment, expense: t.expenseEntry, income: t.incomeEntry, transfer: t.transfer,
   };
@@ -379,6 +389,11 @@ function FinanceScreen({ page, inStack = false }: { page: Page; inStack?: boolea
     if (writing) return;
     void loadAccounts();
     if (!categories) void loadCategories();
+    if (showOverview) {
+      void cashFlow.load();
+      void exchangeRates.load();
+      void nextPayment.load();
+    }
     if (historyId) void history.load();
     if (historyId) void monthlyActivity.load();
     if (transactionId) void transaction.load();
@@ -390,7 +405,7 @@ function FinanceScreen({ page, inStack = false }: { page: Page; inStack?: boolea
   function screenTitle() {
     switch (page.name) {
       case 'archive': return t.archived;
-      case 'accountSettings': return t.accounts;
+      case 'accountSettings': return t.manageAccounts;
       case 'addAccount': return t.addAccount;
       case 'manage': return t.manageAccount;
       case 'reconcile': return t.reconcileAccount;
@@ -434,7 +449,7 @@ function FinanceScreen({ page, inStack = false }: { page: Page; inStack?: boolea
     </SafeAreaView>;
   }
 
-  return <SafeAreaView style={layout.container} edges={inStack ? ['left', 'right', 'bottom'] : ['left', 'right']}>
+  return <SafeAreaView style={layout.container} edges={inStack ? ['left', 'right', 'bottom'] : ['top', 'left', 'right']}>
     {inStack && <Stack.Screen options={{ title: screenTitle(), gestureEnabled: !writing }} />}
     <KeyboardAwareScrollView ref={scroll} key={page.name + (historyId ?? '')}
       bottomOffset={showKeyboardToolbar ? 64 : 12} extraKeyboardSpace={showKeyboardToolbar ? 42 : 0}
@@ -532,8 +547,10 @@ function FinanceScreen({ page, inStack = false }: { page: Page; inStack?: boolea
         <FinanceAlert>{localizedError(listError, lang, reconciling ? 'reconcile' : undefined)}</FinanceAlert>
         <FinanceButton title={copy[lang].retry} onPress={() => void loadAccounts()} />
       </>}
-      {page.name === 'accountSettings' && accounts && <>
-        {[
+      {page.name === 'accountSettings' && <>
+        <FinanceButton title={t.addAccount} icon="plus" primary disabled={blocked} testID="finance-add-account"
+          onPress={() => go({ name: 'addAccount' })} />
+        {accounts && [
           { title: t.activeAccounts, entries: activeAccounts, empty: t.noAccounts },
           { title: t.archived, entries: archivedAccounts, empty: t.noArchived },
         ].map(({ title, entries, empty }) => <View key={title} style={layout.section}>
@@ -550,29 +567,26 @@ function FinanceScreen({ page, inStack = false }: { page: Page; inStack?: boolea
       </>}
       {page.name === 'products' && <>
         {timeZoneSuggestion}
-        {accounts && <View style={[styles.surface, layout.summary]}>
-          <Text accessibilityRole="header" style={styles.groupTitle}>{t.balances}</Text>
-          <View style={!useBalanceRows && layout.currencyStrip}>
-            {totals.map(({ currency, amount }, index) => <View key={currency}
-              style={useBalanceRows ? layout.currencyRow : [layout.currencyCell, index > 0 && layout.currencyDivider]}>
-              <Text style={layout.currencyCode}>{currency}</Text>
-              <Text style={layout.currencyValue}>{amount}</Text>
-            </View>)}
-          </View>
-        </View>}
+        {accounts && <BalanceCard accounts={activeAccounts} lang={lang} />}
         {accounts && <View style={layout.section}>
-          <Text accessibilityRole="header" style={styles.groupTitle}>{t.myAccounts}</Text>
-          {activeAccounts.length ? <View style={styles.surface}>
-            {activeAccounts.map((entry, index) => <AccountRow key={entry.accountId} account={entry} lang={lang}
-              divider={index > 0}
-              open={() => go({ name: 'history', accountId: entry.accountId })} />)}
-          </View> : <Text style={styles.meta}>{t.noAccounts}</Text>}
+          <Text accessibilityRole="header" style={styles.section}>{t.myAccounts}</Text>
+          {activeAccounts.length ? activeAccounts.map((entry) => <OverviewAccountCard key={entry.accountId}
+            account={entry} preview={previewsByAccount.get(entry.accountId)} lang={lang}
+            onOpen={() => go({ name: 'history', accountId: entry.accountId })} />)
+            : <Text style={styles.meta}>{t.addAccountInSettings}</Text>}
           {archivedAccounts.length > 0 && <Pressable accessibilityRole="button" onPress={() => go({ name: 'archive' })}
             style={({ pressed }) => [layout.archiveLink, pressed && layout.pressed]} testID="finance-archive">
             <FinanceIcon name="archive" color={palette.muted} size={16} />
             <Text style={styles.meta}>{t.archived}</Text>
           </Pressable>}
         </View>}
+        <CashFlowCard read={cashFlow} accounts={accounts && activeAccounts} lang={lang}
+          onStatistics={(preset) => router.navigate({ pathname: '/(app)/(tabs)/statistics',
+            params: { ...preset, overview: String(Date.now()) } })} />
+        <ExchangeRatesCard read={exchangeRates} lang={lang} />
+        <NextPaymentCard read={nextPayment} categories={categories} lang={lang}
+          onSchedule={(ruleId, date) => go({ name: 'schedule', accountId: null, ruleId,
+            offset: date ? scheduleOffset(today, date) : undefined })} />
       </>}
       {page.name === 'archive' && accounts && (archivedAccounts.length > 0
         ? <View style={styles.surface}>
@@ -726,14 +740,9 @@ function AccountRow({ account, lang, divider, open }: { account: Account; lang: 
 
 const layout = StyleSheet.create({
   container: { flex: 1, backgroundColor: palette.ground },
-  summary: { padding: 12, gap: 12 },
-  currencyStrip: { flexDirection: 'row' },
-  currencyCell: { flex: 1, paddingHorizontal: 6, gap: 3 },
-  currencyDivider: { borderLeftWidth: StyleSheet.hairlineWidth, borderLeftColor: palette.line },
   currencyRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'baseline',
     gap: 8, paddingVertical: 3 },
   currencyCode: { color: palette.muted, fontSize: 11, fontWeight: '600' },
-  currencyValue: { color: palette.ink, fontSize: 17, fontWeight: '700', fontVariant: ['tabular-nums'], flexShrink: 1 },
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   section: { gap: 10 },
   panel: { backgroundColor: palette.raised, padding: 14, borderRadius: 16, gap: 8 },

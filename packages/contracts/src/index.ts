@@ -144,6 +144,11 @@ const cardFields = {
 };
 const cardInput = T.Object({ ...cardFields, lastFour: T.Optional(cardFields.lastFour) }, { additionalProperties: false });
 const accountCard = T.Object({ cardId: id, accountId: id, ...cardFields, currency, balanceMinor });
+const accountCardPreview = T.Object({
+  accountId: id,
+  count: T.Integer({ minimum: 1 }),
+  cards: T.Array(T.Object({ cardId: id, ...cardFields }), { minItems: 1, maxItems: 2 }),
+});
 const cardWriteFailures = {
   404: 'NOT_FOUND when the account is absent or belongs to another user, or the card does not belong to that account.',
   503: 'TEMPORARY_FAILURE after exhausting transaction retries for a database lock error.',
@@ -221,17 +226,35 @@ const statisticsQuery = T.Object({
   accountId: T.Optional(id),
   categoryId: T.Optional(T.String({ pattern: categoryIdPattern, description: 'Stable category ID from /api/v1/categories' })),
   type: T.Optional(incomeExpenseType), currency: T.Optional(currency), before: T.Optional(accountHistoryCursor),
+  byWeek: T.Optional(T.Literal('true')),
 }, { additionalProperties: false });
 const totalMinor = T.String({ pattern: '^(0|[1-9][0-9]*)$', description: 'Non-negative total in minor units' });
+const statisticsTotals = { currency, incomeMinor: totalMinor, expenseMinor: totalMinor };
 const statistics = T.Object({
   ...statisticsPeriod,
-  totals: T.Array(T.Object({ currency, incomeMinor: totalMinor, expenseMinor: totalMinor })),
+  totals: T.Array(T.Object(statisticsTotals)),
+  weeks: T.Optional(T.Array(T.Object({
+    weekIndex: T.Integer({ minimum: 0, description: 'Zero-based seven-day bucket from fromDate.' }), ...statisticsTotals,
+  }))),
   categories: T.Array(T.Object({ currency, categoryId: T.String(), amountMinor: totalMinor })),
   entries: T.Array(T.Object({
     transactionId: id, transactionVersion: ledgerVersion, date: financialDate, type: incomeExpenseType,
     accountId: id, currency, categoryId: T.String(), comment: T.Union([T.String(), T.Null()]), amountMinor: signedMinor,
   })),
   next: T.Union([accountHistoryCursor, T.Null()]),
+});
+const exchangeRatePoint = T.Object({
+  date: financialDate,
+  rate: T.String({ pattern: '^[0-9]+\\.[0-9]{4}$', description: 'RUB per one unit of the foreign currency.' }),
+});
+const exchangeRates = T.Object({
+  stale: T.Boolean(),
+  rates: T.Array(T.Object({
+    currency: T.Union([T.Literal('USD'), T.Literal('EUR')]),
+    current: exchangeRatePoint,
+    previous: T.Union([exchangeRatePoint, T.Null()]),
+    history: T.Array(exchangeRatePoint),
+  })),
 });
 const transactionChange = T.Object({ ...transactionVersionFields, status: transactionStatus, accounts: T.Array(transactionAccount) });
 const transactionChangePreview = T.Object({
@@ -378,7 +401,8 @@ const scheduleRuleQuery = T.Object({ accountId: T.Optional(id) }, { additionalPr
 const scheduleOccurrenceQuery = T.Object({
   ...reconciliationPreviewQuery.properties, accountId: T.Optional(id), ruleId: T.Optional(id),
 }, { additionalProperties: false });
-const scheduleOccurrenceList = T.Object({ occurrences: T.Array(T.Object({ ...scheduleOccurrence.properties, accountId: id, currency })) });
+const accountOccurrence = T.Object({ ...scheduleOccurrence.properties, accountId: id, currency });
+const scheduleOccurrenceList = T.Object({ occurrences: T.Array(accountOccurrence) });
 const scheduleDateTarget = { ruleId: id, date: financialDate };
 const scheduleDateParams = T.Object(scheduleDateTarget);
 const adminScheduleDateParams = T.Object({ userId: id, ...scheduleDateTarget });
@@ -504,8 +528,9 @@ export const routes = {
   },
   listAccounts: {
     ...route(endpoints.listAccounts, 'mobile', 'List accounts owned by the caller', empty,
-      T.Object({ accounts: T.Array(accountBalance) })),
-    description: 'Returns current balances and versions from one snapshot. Active accounts come first. Archived accounts have archived: true. A regular account omits type.',
+      T.Object({ accounts: T.Array(accountBalance), cardPreviews: T.Array(accountCardPreview) })),
+    description: 'Active accounts come first. Archived accounts have archived: true. A regular account omits type. ' +
+      'For each active account with linked cards, returns the total card count and up to two display previews.',
   },
   getCurrencySummary: {
     ...route(endpoints.getCurrencySummary, 'mobile', 'Read account balances grouped by currency', empty,
@@ -554,13 +579,21 @@ export const routes = {
       'Each response calculates totals, categories and up to 50 entries from one snapshot using the same filters. ' +
       'Entries use signed amounts and are ordered by financial date and transaction ID, newest first. ' +
       'For the next page, pass next as before with the same filters and the explicit period from the first response. ' +
-      'The cursor determines the entry page and totals still cover the whole period. Start at the first page after changing a filter or editing an operation.',
+      'The cursor determines the entry page and totals still cover the whole period. ' +
+      'Set byWeek=true for totals in seven-day buckets anchored at fromDate. Empty buckets are omitted. ' +
+      'Start at the first page after changing a filter or editing an operation.',
     failures: {
       400: 'INVALID_REQUEST for an incomplete or reversed period, invalid date, or malformed or out-of-period cursor.',
       401: 'SESSION_EXPIRED when the mobile session is missing, expired, or no longer current.',
       403: 'DEVICE_REVOKED or PIN_LOCKED when the installation cannot access the account.',
       ...accountNotFound,
     },
+  },
+  getExchangeRates: {
+    ...route(endpoints.getExchangeRates, 'mobile', 'Read official Bank of Russia exchange rates', empty, exchangeRates),
+    description: 'Current and previous published rates for USD/RUB and EUR/RUB and dated points over the last 30 days. ' +
+      'If the source is temporarily unavailable, the most recent saved snapshot is marked stale.',
+    failures: { 503: 'TEMPORARY_FAILURE when no rate snapshot is available.' },
   },
   archiveAccount: {
     ...route(endpoints.archiveAccount, 'mobile', 'Archive an owned account', empty, accountArchiveState),
@@ -670,6 +703,12 @@ export const routes = {
   listScheduleOccurrences: {
     ...route(endpoints.listScheduleOccurrences, 'mobile', 'List scheduled dates and recorded outcomes', empty, scheduleOccurrenceList),
     query: scheduleOccurrenceQuery, description: scheduleOccurrenceDescription, failures: scheduleOccurrenceFailures,
+  },
+  getNextPayment: {
+    ...route(endpoints.getNextPayment, 'mobile', 'Read the next scheduled outgoing payment', empty,
+      T.Object({ payment: T.Union([accountOccurrence, T.Null()]) })),
+    description: 'The earliest unsettled outgoing occurrence on or after the owner’s current financial date. ' +
+      'Paused dates and rules held for recovery are excluded.',
   },
   skipScheduleOccurrence: {
     ...route(endpoints.skipScheduleOccurrence, 'mobile', 'Skip the next due scheduled date', T.Object({
