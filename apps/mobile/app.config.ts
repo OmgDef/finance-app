@@ -1,8 +1,8 @@
 import type { ExpoConfig } from 'expo/config';
 import bootsplash from 'react-native-bootsplash/expo';
+import { brandBlue } from './src/brand-colors.ts';
 import { copy } from './src/copy.ts';
 
-const appIconBackground = '#2459B2';
 const appIconForeground = './assets/app-icon/android-foreground.png';
 
 export default {
@@ -17,7 +17,7 @@ export default {
     bootsplash({
       logo: appIconForeground,
       logoWidth: 134,
-      background: appIconBackground,
+      background: brandBlue,
       assetsOutput: '.expo/bootsplash',
       android: { darkContentBarsStyle: false },
     }),
@@ -34,7 +34,7 @@ export default {
     adaptiveIcon: {
       foregroundImage: appIconForeground,
       monochromeImage: appIconForeground,
-      backgroundColor: appIconBackground,
+      backgroundColor: brandBlue,
     },
   },
   locales: {

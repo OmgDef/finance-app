@@ -65,11 +65,17 @@ curl -fsS http://127.0.0.1:18443/api/v1/health
 
 Для локальной мобильной dev-сборки задайте `EXPO_PUBLIC_API_ORIGIN=http://127.0.0.1:18443`. На Android выполните `adb reverse tcp:18443 tcp:18443`. Для повторения HTTPS-проверок на локальном Compose задайте `TETA_SCHEME=https` и добавьте CA Caddy в доверие тестового клиента.
 
+Для первого запуска на iOS и после изменения нативных зависимостей выполните из корня репозитория `npm run ios -w @teta/mobile`. Команда собирает и устанавливает Debug-версию приложения и запускает Metro. При изменении только JS/TS достаточно `npm start -w @teta/mobile`: нажмите `i` в терминале или откройте установленное приложение TetaFinance в Simulator. Expo Go не содержит `InstallationMarker` и `RNBootSplash`, которые нужны для запуска приложения.
+
+Если меняли `app.config.ts` и каталог `ios` уже существует, перед сборкой примените конфигурацию из `apps/mobile`: `npx expo prebuild --platform ios --no-clean --no-install`.
+
+На macOS команды `npm start` и `npm run ios` этого workspace открывают окно симулятора без AppleScript. Используйте их, если macOS отклоняет запрос Expo к `System Events`.
+
 За nginx задайте в API два публичных HTTPS-адреса в `API_ORIGIN` и `ADMIN_ORIGIN`, а в `PROXY_IP` укажите адрес, с которого nginx подключается к Fastify. В блоках проксирования передавайте исходный `Host` через `proxy_set_header Host $http_host;`, схему через `proxy_set_header X-Forwarded-Proto $scheme;` и адрес клиента через `proxy_set_header X-Forwarded-For $remote_addr;`. Fastify принимает внутреннее HTTP-соединение от nginx. [Документация nginx](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_set_header)
 
 Команда [оператора](../apps/api/src/operator.ts) принимает email аргументом, пароль по stdin и выводит одноразовый секрет восстановления. Выполните `node apps/api/src/operator.ts <email>` в контейнере API и откройте «Настроить или восстановить доступ» на административном хосте. Для входа после настройки TOTP дождитесь следующего 30-секундного кода. `npm test` запускает интеграционные проверки при наличии `TEST_DATABASE_URL` к мигрированной синтетической БД. Для мобильной сборки на стенде задайте `EXPO_PUBLIC_API_ORIGIN=https://192.168.139.211:18443`. Для iOS добавьте CA стенда в выбранный симулятор. Для Android используйте тестовую конфигурацию доверия к CA для адреса стенда. Предыдущие мобильные прогоны шли через HTTPS на `localhost` с доверенным тестовым CA и `adb reverse` на Android. Контакты на экране активации загружаются из админки. При первом запуске без сети контакты скрыты.
 
-Нативные команды из каталога `apps/mobile` после `expo prebuild --no-install` и настройки тестового HTTPS. Для iOS сначала выполните `pod install` из `ios` под CocoaPods 1.16.2. В прогоне для Keychain подписали сборку Xcode с тестовыми `application-identifier` и `keychain-access-groups` в сгенерированном проекте симулятора. Android использовал JDK 21 и тестовую подпись Gradle.
+Нативные команды из каталога `apps/mobile` после `expo prebuild --no-install` и настройки тестового HTTPS. Для iOS сначала выполните `pod install` из `ios` под CocoaPods 1.16.2. В прогоне для Keychain подписали сборку Xcode с тестовыми `application-identifier` и `keychain-access-groups` в сгенерированном проекте симулятора. Для сборки на iPhone удалите эти тестовые значения из `.entitlements`: при автоматической подписи Xcode использует профиль выбранной команды, а SecureStore использует группу Keychain приложения по умолчанию. Android использовал JDK 21 и тестовую подпись Gradle.
 
 При чистой генерации текущего проекта Expo создаёт `TetaFinance.xcworkspace` и схему `TetaFinance`. В проекте, сгенерированном для этого прогона, оба имени были `TetaFinans`.
 

@@ -13,7 +13,7 @@ type Status = 'active' | 'blocked' | 'review';
 interface User { id: string; email: string; status: Status; active_device_id: string | null }
 interface Device {
   id: string; user_id: string; state: 'active' | 'locked' | 'revoked';
-  pin_hash: string; pin_failures: number; biometric_verifier: string | null;
+  verifier: string; pin_hash: string; pin_failures: number; biometric_verifier: string | null;
 }
 type UserWithDevice = User & { device_state: Device['state'] | null };
 const usersWithDevices = sql`SELECT u.*, d.state AS device_state FROM users u LEFT JOIN devices d ON d.id = u.active_device_id`;
@@ -172,7 +172,11 @@ export function mobileAccess(db: Db, key: Buffer, clock: () => number) {
     }),
     async setBiometrics(value: string, input?: Body<'enableBiometrics'>) {
       const outcome = await withSession(value, async (tx, user, device, now) => {
-        if (input) {
+        if (input && 'installationSecret' in input) {
+          if (!same(device.verifier, digest('installation', input.installationSecret))) {
+            throw new AccessError(401, 'BIOMETRICS_INVALID');
+          }
+        } else if (input) {
           const error = await checkPin(tx, user, device, input.pin, now);
           if (error) return error;
         }

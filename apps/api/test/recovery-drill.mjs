@@ -219,7 +219,8 @@ try {
   const unknown = await newUser(admin, 'no-review-evidence', false);
   const unknownForActive = (await expect('issue', { userId: active.id }, admin)).data.code;
   const biometricSecret = token();
-  await expect('enableBiometrics', { pin, biometricSecret }, { session: active.session });
+  await expect('enableBiometrics', { installationSecret: active.activation.installationSecret, biometricSecret },
+    { session: active.session });
   // Backdate only the schedule fixtures so a worker can post their synthetic dates immediately.
   const date = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
   const accountOf = async (user, name) => (await expect('createAccount', { name, currency: 'EUR', startDate: date,

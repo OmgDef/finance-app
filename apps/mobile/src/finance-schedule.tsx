@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Keyboard, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import { KeyboardController } from 'react-native-keyboard-controller';
 import type { Body, Language, Result } from '@teta/contracts';
 import { request } from './api';
 import { copy } from './copy';
@@ -54,7 +55,7 @@ function ScheduleSkipForm({ entry, lang, disabled, onSubmit }: {
     <FinanceField title={t.skipReason} value={reason} onChangeText={setReason} editable={!disabled}
       multiline maxLength={500} testID="schedule-skip-reason" />
     <FinanceButton title={t.skip} onPress={() => {
-      Keyboard.dismiss();
+      void KeyboardController.dismiss();
       onSubmit({ kind: 'schedule.skip', ruleId, date, body: { reason: explanation } });
     }} primary disabled={disabled || !explanation} testID="schedule-skip-save" />
   </View>;

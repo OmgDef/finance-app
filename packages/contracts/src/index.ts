@@ -488,8 +488,14 @@ export const routes = {
     },
   },
   logout: route(endpoints.logout, 'mobile', 'Revoke the installation and its sessions', empty, ok),
-  enableBiometrics: route(endpoints.enableBiometrics, 'mobile', 'Register a locally protected biometric secret',
-    T.Object({ pin, biometricSecret: secret }), ok),
+  enableBiometrics: {
+    ...route(endpoints.enableBiometrics, 'mobile', 'Register a locally protected biometric secret', T.Union([
+      T.Object({ installationSecret: secret, biometricSecret: secret }, { additionalProperties: false }),
+      T.Object({ pin, biometricSecret: secret }, { additionalProperties: false }),
+    ]), ok),
+    description: 'Requires an active session and its installation secret. Older clients can confirm with the app PIN instead.',
+    failures: { 401: 'SESSION_EXPIRED for an expired or revoked session, BIOMETRICS_INVALID for an installation secret that does not match the session, or PIN_INVALID for an incorrect legacy PIN.' },
+  },
   disableBiometrics: route(endpoints.disableBiometrics, 'mobile', 'Revoke the biometric secret', empty, ok),
   createAccount: {
     ...route(endpoints.createAccount, 'mobile', 'Create an account, cash account, or deposit with an opening balance',

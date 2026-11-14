@@ -2,9 +2,10 @@ import { createContext, use, useEffect, useRef, useState } from 'react';
 import type { ComponentRef, ReactNode } from 'react';
 import { Redirect, Stack, useGlobalSearchParams, useIsFocused, useLocalSearchParams, usePathname, usePreventRemove, useRouter } from 'expo-router';
 import {
-  ActivityIndicator, Alert, InputAccessoryView, Keyboard, Platform, Pressable, RefreshControl, ScrollView,
+  ActivityIndicator, Alert, Platform, Pressable, RefreshControl,
   StyleSheet, Text, View, useWindowDimensions,
 } from 'react-native';
+import { KeyboardAwareScrollView, KeyboardController, KeyboardToolbar } from 'react-native-keyboard-controller';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAccessSession } from './access-session';
 import type { Language, Result } from '@teta/contracts';
@@ -129,7 +130,7 @@ function useWorkspaceModel(access: FinanceAccess, lang: Language) {
   }
 
   function go(next: FinancePage) {
-    Keyboard.dismiss();
+    void KeyboardController.dismiss();
     command.clearError();
     router.push(financeHref(next));
   }
@@ -270,7 +271,7 @@ function FinanceScreen({ page, inStack = false }: { page: Page; inStack?: boolea
   const wasFocused = useRef(false);
   if (focused) wasFocused.current = true;
   const statistics = useStatistics(access, page.name === 'statistics' && wasFocused.current, revision);
-  const scroll = useRef<ComponentRef<typeof ScrollView>>(null);
+  const scroll = useRef<ComponentRef<typeof KeyboardAwareScrollView>>(null);
   const accountId = 'accountId' in page ? page.accountId : null;
   const account = accountId ? accounts?.find((entry) => entry.accountId === accountId) : undefined;
   const historyId = page.name === 'history' ? page.accountId : undefined;
@@ -319,6 +320,9 @@ function FinanceScreen({ page, inStack = false }: { page: Page; inStack?: boolea
   const activeHistory = history.data;
   const adjustment = receiptResult && 'adjustmentId' in receiptResult ? receiptResult : undefined;
   const reconciling = page.name === 'reconcile';
+  const isForm = page.name === 'addAccount' || page.name === 'accountEditor' || reconciling || !!formKind ||
+    (page.name === 'schedule' && (!!page.editor || !!page.skipDate));
+  const showKeyboardToolbar = Platform.OS === 'ios' && isForm;
   const detailDepositTerms = account ? depositTerms(account, lang) : '';
 
   useEffect(() => {
@@ -331,7 +335,7 @@ function FinanceScreen({ page, inStack = false }: { page: Page; inStack?: boolea
   usePreventRemove(writing);
 
   function returnTo(previous: FinancePage) {
-    Keyboard.dismiss();
+    void KeyboardController.dismiss();
     if (router.canDismiss()) router.back();
     else router.replace(financeHref(previous));
   }
@@ -397,9 +401,12 @@ function FinanceScreen({ page, inStack = false }: { page: Page; inStack?: boolea
 
   return <SafeAreaView style={layout.container} edges={inStack ? ['left', 'right', 'bottom'] : ['left', 'right']}>
     {inStack && <Stack.Screen options={{ title: screenTitle(), gestureEnabled: !writing }} />}
-    <ScrollView ref={scroll} key={page.name + (historyId ?? '')} automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
+    <KeyboardAwareScrollView ref={scroll} key={page.name + (historyId ?? '')}
+      bottomOffset={showKeyboardToolbar ? 64 : 12} extraKeyboardSpace={showKeyboardToolbar ? 42 : 0}
+      disableScrollOnKeyboardHide
       contentInsetAdjustmentBehavior={inStack ? 'never' : 'automatic'}
-      keyboardDismissMode="on-drag" keyboardShouldPersistTaps="handled" contentContainerStyle={styles.page}
+      keyboardDismissMode={isForm ? 'none' : 'on-drag'}
+      keyboardShouldPersistTaps="handled" contentContainerStyle={styles.page}
       refreshControl={financeTab || page.name === 'archive' || page.name === 'history' || page.name === 'transaction' ||
         (page.name === 'schedule' && !page.editor && !page.skipDate)
         ? <RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={palette.accent} colors={[palette.accent]} />
@@ -689,15 +696,15 @@ function FinanceScreen({ page, inStack = false }: { page: Page; inStack?: boolea
             (previous, next) => ({ ...next, entries: [...previous.entries, ...next.entries] }));
         }} />}
       </View>}
-    </ScrollView>
-    {/* Statistics date fields have a Done key. Mounting an accessory view on tab focus clips the scroll content on iOS. */}
-    {focused && Platform.OS === 'ios' && (page.name === 'addAccount' || page.name === 'accountEditor' || reconciling || !!formKind ||
-      (page.name === 'schedule' && (!!page.editor || !!page.skipDate))) &&
-      <InputAccessoryView nativeID="finance-keyboard" backgroundColor={palette.ground}>
-        <View style={layout.keyboardBar}>
-          <FinanceButton title={t.done} onPress={Keyboard.dismiss} testID="finance-keyboard-done" />
-        </View>
-      </InputAccessoryView>}
+    </KeyboardAwareScrollView>
+    {focused && showKeyboardToolbar && <KeyboardToolbar>
+      <KeyboardToolbar.Content>
+        <Pressable accessibilityRole="button" onPress={() => void KeyboardController.dismiss()}
+          style={layout.keyboardDone} testID="finance-keyboard-done">
+          <Text style={styles.buttonText}>{t.done}</Text>
+        </Pressable>
+      </KeyboardToolbar.Content>
+    </KeyboardToolbar>}
   </SafeAreaView>;
 }
 
@@ -744,7 +751,7 @@ const layout = StyleSheet.create({
   rows: { backgroundColor: palette.panel, borderRadius: 16, paddingHorizontal: 12 },
   detailHeader: { gap: 8 },
   panel: { backgroundColor: palette.raised, padding: 14, borderRadius: 16, gap: 8 },
-  keyboardBar: { paddingHorizontal: 12, paddingVertical: 4, alignItems: 'flex-end' },
+  keyboardDone: { minHeight: 42, justifyContent: 'center', alignSelf: 'flex-end', paddingHorizontal: 16 },
   archiveLink: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 44 },
   accountRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center', paddingHorizontal: 12,
     paddingVertical: 9, minHeight: 59 },

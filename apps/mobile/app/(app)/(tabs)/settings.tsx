@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { useIsFocused } from 'expo-router';
-import { Platform, ScrollView } from 'react-native';
+import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAccessSession } from '../../../src/access-session';
 import { styles } from '../../../src/finance-ui';
@@ -20,9 +20,9 @@ export default function Settings() {
   }, [focused]);
 
   return <SafeAreaView edges={['left', 'right']} style={{ flex: 1 }}>
-    <ScrollView contentInsetAdjustmentBehavior="automatic" automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
+    <KeyboardAwareScrollView contentInsetAdjustmentBehavior="automatic" bottomOffset={12}
       keyboardDismissMode="on-drag" keyboardShouldPersistTaps="handled" contentContainerStyle={styles.page}>
       {settings}
-    </ScrollView>
+    </KeyboardAwareScrollView>
   </SafeAreaView>;
 }

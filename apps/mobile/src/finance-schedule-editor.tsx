@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
-import { Keyboard, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
+import { KeyboardController } from 'react-native-keyboard-controller';
 import type { Body, Language, Result } from '@teta/contracts';
 import { financeCopy } from './finance-copy';
 import { amountInMinorUnits, financialDate, formatAmount, formatFinancialDate } from './finance-format';
@@ -52,7 +53,7 @@ export function ScheduleEditor(props: EditorProps) {
 
   function submit() {
     if (disabled) return;
-    Keyboard.dismiss();
+    void KeyboardController.dismiss();
     if (!account || account.archived) return setError('account');
     if (!amount.value || amount.value === '0' || amount.value.startsWith('-')) return setError('amount');
     if (!matching.some(({ id }) => id === categoryId)) return setError('category');

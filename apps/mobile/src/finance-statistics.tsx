@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Keyboard, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { KeyboardController } from 'react-native-keyboard-controller';
 import type { Language, Result, StatisticsQuery } from '@teta/contracts';
 import { request } from './api';
 import { copy } from './copy';
@@ -125,7 +126,7 @@ function FilterForm({ current, report, today, accounts, categories, lang, onAppl
       setInvalid(true);
       return;
     }
-    Keyboard.dismiss();
+    void KeyboardController.dismiss();
     onApply({
       ...(period === 'custom' && { fromDate: from.value, throughDate: through.value }),
       accountId: account === 'all' ? undefined : account,
@@ -166,7 +167,7 @@ function FilterForm({ current, report, today, accounts, categories, lang, onAppl
     {invalid && period === 'custom' && <FinanceAlert>{t.invalidPeriod}</FinanceAlert>}
     <View style={layout.actions}>
       <FinanceButton title={t.apply} onPress={apply} primary testID="statistics-apply" />
-      <FinanceButton title={t.reset} onPress={() => { Keyboard.dismiss(); onApply({}); }} testID="statistics-reset" />
+      <FinanceButton title={t.reset} onPress={() => { void KeyboardController.dismiss(); onApply({}); }} testID="statistics-reset" />
     </View>
   </View>;
 }

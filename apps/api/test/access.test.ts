@@ -324,8 +324,12 @@ test('Access API against migrated MySQL', async (t) => {
     expect(await send('me', undefined, { token: oldSession }), 403, 'DEVICE_REVOKED');
     expect(await activate(valid), 401, 'ACTIVATION_INVALID');
 
+    const enrollment = { token: second.data().token };
+    expect(await send('enableBiometrics', { biometricSecret: token(), pin }, enrollment), 200);
     const biometricSecret = token();
-    expect(await send('enableBiometrics', { biometricSecret, pin }, { token: second.data().token }), 200);
+    expect(await send('enableBiometrics', { installationSecret: winner, biometricSecret }), 401, 'SESSION_EXPIRED');
+    expect(await send('enableBiometrics', { installationSecret: winner, biometricSecret }, enrollment), 200);
+    expect(await send('enableBiometrics', { installationSecret: loser, biometricSecret: token() }, enrollment), 401, 'BIOMETRICS_INVALID');
     const bio = await send('unlock', { installationSecret: winner, biometricSecret });
     expect(bio, 200);
     expect(await send('me', undefined, { token: second.data().token }), 401, 'SESSION_EXPIRED');

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Keyboard, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { KeyboardController } from 'react-native-keyboard-controller';
 import type { Body, Language, Result } from '@teta/contracts';
 import { request } from './api';
 import { copy } from './copy';
@@ -182,7 +183,7 @@ export function ReconciliationForm({ account, categories, access, lang, visible,
     if (!selected.length && sawDates && !none) return setError('reconcileConfirmDates');
     if (selected.some(({ reason }) => !reason.trim())) return setError('reconcileSkipReasonRequired');
     setError(undefined);
-    Keyboard.dismiss();
+    void KeyboardController.dismiss();
     setReview({ snapshot: current, body: {
       expectedAccountVersion: current.preview.accountVersion,
       actualBalanceMinor: actual.value,

@@ -10,7 +10,7 @@ import { FinanceAlert, palette, styles } from './finance-ui';
 
 const languageNames = { ru: 'Русский', en: 'English' } as const;
 
-export function SettingsScreen({ lang, profile, busy, languageError, zoneEditing, zoneEditor, biometricEditor, notice,
+export function SettingsScreen({ lang, profile, busy, languageError, zoneEditing, zoneEditor, notice,
   biometricsEnabled, onLanguage, onTimeZone, onBiometrics, onSignOut }: {
   lang: Language;
   profile: Result<'me'>;
@@ -18,7 +18,6 @@ export function SettingsScreen({ lang, profile, busy, languageError, zoneEditing
   languageError: boolean;
   zoneEditing: boolean;
   zoneEditor?: ReactNode;
-  biometricEditor?: ReactNode;
   notice?: ReactNode;
   biometricsEnabled: boolean;
   onLanguage: (language: Language) => void;
@@ -61,9 +60,8 @@ export function SettingsScreen({ lang, profile, busy, languageError, zoneEditing
       <Text accessibilityRole="header" style={styles.groupTitle}>{t.security}</Text>
       <View style={styles.surface}>
         <SettingRow icon="biometrics" title={t.biometricSignIn} value={biometricsEnabled ? t.biometricOn : t.biometricOff}
-          hint={biometricsEnabled ? t.disable : t.enable} onPress={onBiometrics} expanded={!!biometricEditor}
+          hint={biometricsEnabled ? t.disable : t.enable} onPress={onBiometrics}
           disabled={busy} testID="finance-biometrics" />
-        {biometricEditor}
       </View>
       {notice}
     </View>

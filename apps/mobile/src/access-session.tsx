@@ -1,8 +1,9 @@
-import { createContext, use, useEffect, useRef, useState } from 'react';
-import type { ReactNode } from 'react';
+import { createContext, use, useEffect, useEffectEvent, useRef, useState } from 'react';
+import type { ComponentRef, ReactNode, RefObject } from 'react';
 import {
-  Alert, AppState, Keyboard, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
+  AppState, Platform, Pressable, StyleSheet, Text, TextInput, View,
 } from 'react-native';
+import { KeyboardAwareScrollView, KeyboardController, KeyboardToolbar } from 'react-native-keyboard-controller';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { getCalendars, getLocales } from 'expo-localization';
 import * as Store from 'expo-secure-store';
@@ -15,12 +16,14 @@ import { dateInTimeZone } from './finance-format';
 import { FinanceBrand, FinanceButton, palette } from './finance-ui';
 import { SettingsScreen } from './settings-screen';
 import { SupportScreen } from './support-screen';
+import { UnlockScreen } from './unlock-screen';
 import {
-  clearBiometrics, forgetInstallation, hasBiometrics, initializeInstallation,
-  readBiometrics, saveBiometrics, saveInstallation, secret,
+  clearBiometrics, clearPendingInstallation, enableScenePrivacy, forgetInstallation, hasBiometrics, initializeInstallation,
+  markBiometricsEnabled, readBiometrics, saveBiometrics, saveInstallation, secret,
 } from './installation';
 
-type Mode = 'loading' | 'activate' | 'unlock' | 'checking' | 'profile' | 'storage';
+type Mode = 'loading' | 'activate' | 'recovery' | 'verify' | 'unlock' | 'checking' | 'profile' | 'storage';
+type ActivationInput = ComponentRef<typeof TextInput>;
 
 const AccessContext = createContext<{
   access: FinanceAccess | null;
@@ -31,6 +34,8 @@ const AccessContext = createContext<{
   restoreSettings: boolean;
   setSettingsFocused: (focused: boolean) => void;
   startupReady: boolean;
+  setSplashHidden: (hidden: boolean) => void;
+  showsUnlockScreen: boolean;
   timeZoneSuggestion: ReactNode;
   signedOut: ReactNode;
 } | null>(null);
@@ -47,27 +52,36 @@ export function AccessProvider({ children }: { children: ReactNode }) {
   const languageWrite = useRef<Promise<void> | undefined>(undefined);
   const t = copy[lang];
   const [startupReady, setStartupReady] = useState(false);
+  const [splashHidden, setSplashHidden] = useState(false);
   const [mode, setMode] = useState<Mode>('loading');
   const [installation, setInstallation] = useState<string | null>(null);
+  const [pendingInstallation, setPendingInstallation] = useState<string | null>(null);
+  const [installationBlocked, setInstallationBlocked] = useState(false);
   const [profile, setProfile] = useState<Result<'me'> | null>(null);
   const [supportOpen, setSupportOpen] = useState(false);
   const settingsFocused = useRef(false);
   const [timeZoneDraft, setTimeZoneDraft] = useState<string | null>(null);
   const [timeZoneNotice, setTimeZoneNotice] = useState('');
   const [enabled, setEnabled] = useState(false);
+  const [biometricsReset, setBiometricsReset] = useState(false);
+  const [biometricNotice, setBiometricNotice] = useState('');
   const [checkingFailed, setCheckingFailed] = useState(false);
-  const [setup, setSetup] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
   const [email, setEmail] = useState('');
   const [code, setCode] = useState('');
   const [pin, setPin] = useState('');
   const [confirm, setConfirm] = useState('');
+  const codeInput = useRef<ActivationInput>(null);
+  const pinInput = useRef<ActivationInput>(null);
+  const confirmInput = useRef<ActivationInput>(null);
   const session = useRef<Result<'activate'> | null>(null);
   const epoch = useRef(0);
   const lastAway = useRef<number | null>(null);
   const expired = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const invalidatedBiometrics = useRef(false);
+  const biometricPrompt = useRef(false);
+  const triedStartupBiometrics = useRef(false);
   const operation = useRef(false);
   const zoneOperation = useRef(false);
   const zoneRevision = useRef(0);
@@ -77,8 +91,7 @@ export function AccessProvider({ children }: { children: ReactNode }) {
     if (operation.current || zoneOperation.current) return;
     setTimeZoneDraft(null);
     setTimeZoneNotice('');
-    setSetup(false);
-    setPin('');
+    setBiometricNotice('');
     setNotice('');
   }
 
@@ -92,7 +105,8 @@ export function AccessProvider({ children }: { children: ReactNode }) {
     setTimeZoneNotice('');
     setPin('');
     setConfirm('');
-    setSetup(false);
+    setBiometricNotice('');
+    if (next === 'recovery') setInstallationBlocked(true);
     setMode(next);
   }
 
@@ -100,27 +114,32 @@ export function AccessProvider({ children }: { children: ReactNode }) {
     setMode('loading');
     try {
       if (!protectedPreview.current) {
-        if (Platform.OS === 'ios') await Capture.enableAppSwitcherProtectionAsync(1);
-        else await Capture.preventScreenCaptureAsync('teta-access');
+        if (Platform.OS === 'ios') {
+          if (enableScenePrivacy) await enableScenePrivacy();
+          else await Capture.enableAppSwitcherProtectionAsync(1);
+        } else await Capture.preventScreenCaptureAsync('teta-access');
         protectedPreview.current = true;
       }
-      const saved = await initializeInstallation();
-      setInstallation(saved);
+      const { active, pending } = await initializeInstallation();
+      setInstallation(active);
+      setPendingInstallation(pending);
+      setInstallationBlocked(false);
       setEnabled(await hasBiometrics());
-      setMode(saved ? 'unlock' : 'activate');
+      setNotice('');
+      setMode(pending ? 'verify' : active ? 'unlock' : 'activate');
     } catch {
       setMode('storage');
       setNotice('STORAGE');
     }
   }
 
-  async function checkAccess() {
+  async function checkAccess(keepUnlockScreen = false) {
     const active = session.current;
     if (!active || AppState.currentState !== 'active') return;
     const attempt = ++epoch.current;
     setProfile(null);
     setCheckingFailed(false);
-    setMode('checking');
+    if (!keepUnlockScreen) setMode('checking');
     try {
       const profile = await request('me', { token: active.token });
       if (epoch.current !== attempt || AppState.currentState !== 'active') return;
@@ -133,7 +152,8 @@ export function AccessProvider({ children }: { children: ReactNode }) {
       setNotice(reason);
       setCheckingFailed(true);
       if (reason === 'SESSION_EXPIRED') lock('unlock');
-      if (reason === 'DEVICE_REVOKED' || reason === 'PIN_LOCKED') lock('activate');
+      else if (reason === 'DEVICE_REVOKED' || reason === 'PIN_LOCKED') lock('recovery');
+      else setMode('checking');
     }
   }
 
@@ -146,6 +166,8 @@ export function AccessProvider({ children }: { children: ReactNode }) {
       if (!disposed) setStartupReady(true);
     });
     const listener = AppState.addEventListener('change', (state) => {
+      // The system dialog can briefly make iOS inactive while the app is still in the foreground.
+      if (state === 'inactive' && biometricPrompt.current) return;
       if (state !== 'active') {
         lastAway.current ??= Date.now();
         epoch.current += 1;
@@ -154,22 +176,22 @@ export function AccessProvider({ children }: { children: ReactNode }) {
           zoneRevision.current += 1;
           setBusy(false);
         }
+        if (state === 'background') {
+          setPin('');
+          setConfirm('');
+        }
         if (session.current) {
           setProfile(null);
           setTimeZoneDraft(null);
           setTimeZoneNotice('');
-          if (state === 'background' && !operation.current) {
-            setSetup(false);
-            setPin('');
-          }
           setMode('checking');
         }
         return;
       }
       const away = lastAway.current;
       lastAway.current = null;
-      if (!session.current) return;
-      if ((away !== null && Date.now() - away >= 120_000) || Date.now() >= Date.parse(session.current.expiresAt)) {
+      if (away === null || !session.current) return;
+      if (Date.now() - away >= 120_000 || Date.now() >= Date.parse(session.current.expiresAt)) {
         lock('unlock');
       } else {
         void checkAccess();
@@ -182,6 +204,23 @@ export function AccessProvider({ children }: { children: ReactNode }) {
       epoch.current += 1;
     };
   }, []);
+
+  const tryStartupBiometrics = useEffectEvent(() => {
+    if (triedStartupBiometrics.current || AppState.currentState !== 'active') return;
+    triedStartupBiometrics.current = true;
+    if (mode === 'unlock' && enabled && Store.canUseBiometricAuthentication()) {
+      void run(() => unlock({ biometrics: true }));
+    }
+  });
+
+  useEffect(() => {
+    if (!splashHidden) return;
+    tryStartupBiometrics();
+    const listener = AppState.addEventListener('change', (state) => {
+      if (state === 'active') tryStartupBiometrics();
+    });
+    return () => listener.remove();
+  }, [splashHidden]);
 
   const today = profile?.today;
   const timeZone = profile?.timeZone;
@@ -214,7 +253,7 @@ export function AccessProvider({ children }: { children: ReactNode }) {
   async function run(action: () => Promise<void>) {
     if (operation.current || zoneOperation.current) return;
     operation.current = true;
-    Keyboard.dismiss();
+    void KeyboardController.dismiss();
     setBusy(true);
     setNotice('');
     try { await action(); }
@@ -232,74 +271,118 @@ export function AccessProvider({ children }: { children: ReactNode }) {
     session.current = next;
     clearTimeout(expired.current);
     expired.current = setTimeout(() => lock('unlock'), Math.max(0, Date.parse(next.expiresAt) - Date.now()));
-    await checkAccess();
+    await checkAccess(true);
+  }
+
+  async function finishActivation(value: string, result: Result<'activate'>, attempt: number) {
+    await clearBiometrics();
+    setEnabled(false);
+    invalidatedBiometrics.current = false;
+    setBiometricsReset(false);
+    await saveInstallation(value);
+    setInstallation(value);
+    setInstallationBlocked(false);
+    setPendingInstallation(null);
+    // A stale pending entry that matches the active installation is ignored on startup.
+    await clearPendingInstallation().catch(() => {});
+    setCode('');
+    setMode('unlock');
+    await accept(result, attempt);
   }
 
   async function activate() {
     if (!/^[0-9]{4}$/.test(pin) || pin !== confirm) throw new ApiError('PIN_MISMATCH');
     const attempt = epoch.current;
-    const value = installation ?? await secret();
-    await saveInstallation(value);
-    setInstallation(value);
-    if (epoch.current !== attempt) {
-      setMode('unlock');
-      return;
-    }
+    const value = pendingInstallation ?? await secret();
+    if (epoch.current !== attempt || AppState.currentState !== 'active') return;
+    await saveInstallation(value, true);
+    setPendingInstallation(value);
+    if (epoch.current !== attempt || AppState.currentState !== 'active') return;
+    let result: Result<'activate'>;
     try {
-      const result = await request('activate', { body: { email, code, pin, installationSecret: value } });
-      setCode('');
-      setMode('unlock');
-      await accept(result, attempt);
+      result = await request('activate', { body: { email, code, pin, installationSecret: value } });
     } catch (error) {
-      if (errorCode(error) === 'NETWORK') setMode('unlock');
+      const reason = errorCode(error);
+      if (['ACTIVATION_INVALID', 'RATE_LIMITED', 'INVALID_REQUEST', 'API_CONFIGURATION'].includes(reason)) {
+        if (!pendingInstallation) {
+          await clearPendingInstallation();
+          setPendingInstallation(null);
+        }
+      } else setMode('verify');
       throw error;
     }
+    setMode('verify');
+    if (epoch.current !== attempt || AppState.currentState !== 'active') return;
+    await finishActivation(value, result, attempt);
   }
 
-  async function unlock(withBiometrics: boolean) {
-    if (!installation) return;
-    let biometricSecret: string | null = null;
-    if (withBiometrics) {
+  async function unlock(method: { pin: string } | { biometrics: true }) {
+    const verifyingActivation = mode === 'verify';
+    const value = verifyingActivation ? pendingInstallation : installation;
+    if (!value || AppState.currentState !== 'active') return;
+    const attempt = epoch.current;
+    const current = () => epoch.current === attempt && AppState.currentState === 'active';
+    let credentials: { pin: string } | { biometricSecret: string };
+    if ('biometrics' in method) {
       if (!Store.canUseBiometricAuthentication()) throw new ApiError('BIOMETRICS_INVALID');
+      let biometricSecret: string | null;
       try {
-        biometricSecret = await readBiometrics();
+        biometricSecret = await withBiometricPrompt(attempt, () => readBiometrics(t.biometrics));
       } catch {
+        if (epoch.current !== attempt) return;
         throw new ApiError('BIOMETRICS_INVALID');
       }
+      if (!current()) return;
       if (!biometricSecret) {
         invalidatedBiometrics.current = true;
         throw new ApiError('BIOMETRICS_INVALID');
       }
-    }
-    if (AppState.currentState !== 'active') return;
-    const attempt = epoch.current;
+      credentials = { biometricSecret };
+    } else credentials = method;
+    if (!current()) return;
+    let result: Result<'unlock'>;
     try {
-      const result = await request('unlock', { body: biometricSecret
-        ? { installationSecret: installation, biometricSecret }
-        : { installationSecret: installation, pin } });
-      if (!withBiometrics && invalidatedBiometrics.current) {
-        try {
-          await request('disableBiometrics', { token: result.token });
-          await clearBiometrics();
-          invalidatedBiometrics.current = false;
-          setEnabled(false);
-        } catch {
-          setNotice('BIOMETRICS_INVALID');
-        }
-      }
-      await accept(result, attempt);
+      result = await request('unlock', { body: { installationSecret: value, ...credentials } });
     } catch (error) {
-      if (errorCode(error) === 'BIOMETRICS_INVALID') invalidatedBiometrics.current = true;
-      if (errorCode(error) === 'PIN_LOCKED' || errorCode(error) === 'DEVICE_REVOKED') lock('activate');
+      if (!current()) return;
+      const reason = errorCode(error);
+      if (reason === 'BIOMETRICS_INVALID') invalidatedBiometrics.current = true;
+      if (reason === 'PIN_LOCKED' || reason === 'DEVICE_REVOKED') {
+        if (verifyingActivation) {
+          await clearPendingInstallation();
+          setPendingInstallation(null);
+          setMode(installation ? 'recovery' : 'activate');
+        } else lock('recovery');
+      }
       throw error;
     }
+    if (!current()) return;
+    if (verifyingActivation) {
+      await finishActivation(value, result, attempt);
+      return;
+    }
+    if ('pin' in method && invalidatedBiometrics.current) {
+      try {
+        await request('disableBiometrics', { token: result.token });
+        await clearBiometrics();
+        invalidatedBiometrics.current = false;
+        setEnabled(false);
+        setBiometricsReset(true);
+      } catch {
+        // Keep the reset pending for the next PIN unlock if revocation could not be completed.
+      }
+    }
+    await accept(result, attempt);
   }
 
   async function logout() {
     const value = session.current?.token;
     lock('activate');
     setInstallation(null);
+    setPendingInstallation(null);
+    setInstallationBlocked(false);
     setEnabled(false);
+    setBiometricsReset(false);
     invalidatedBiometrics.current = false;
     try {
       await forgetInstallation();
@@ -322,33 +405,58 @@ export function AccessProvider({ children }: { children: ReactNode }) {
     setNotice('offlineLogout');
   }
 
-  function reset() {
-    Alert.alert(t.resetTitle, undefined, [
-      { text: t.cancel, style: 'cancel' },
-      { text: t.reset, style: 'destructive', onPress: () => void run(logout) },
-    ]);
+  async function withBiometricPrompt<T>(attempt: number, action: () => Promise<T>) {
+    biometricPrompt.current = true;
+    try {
+      return await action();
+    } finally {
+      if (epoch.current === attempt && Platform.OS === 'ios' && AppState.currentState === 'inactive') {
+        await waitForActive();
+      }
+      biometricPrompt.current = false;
+    }
   }
 
   async function changeBiometrics() {
-    const value = session.current?.token;
-    if (!value) return;
-    if (enabled) {
-      await request('disableBiometrics', { token: value });
-      await clearBiometrics();
-      setEnabled(false);
-      return;
-    }
-    if (!Store.canUseBiometricAuthentication()) throw new ApiError('BIOMETRICS_INVALID');
-    const biometricSecret = await secret();
-    await saveBiometrics(biometricSecret);
+    const active = session.current;
+    if (!active || !installation || AppState.currentState !== 'active') return;
+    const attempt = epoch.current;
+    const current = () => epoch.current === attempt && session.current === active && AppState.currentState === 'active';
+    setBiometricNotice('');
+    let clearPendingSecret = false;
     try {
-      await request('enableBiometrics', { token: value, body: { pin, biometricSecret } });
+      if (enabled) {
+        await request('disableBiometrics', { token: active.token });
+        setEnabled(false);
+        await clearBiometrics();
+        return;
+      }
+      if (!Store.canUseBiometricAuthentication()) throw new ApiError('BIOMETRICS_SETUP_UNAVAILABLE');
+      const biometricSecret = await secret();
+      if (!current()) return;
+      clearPendingSecret = true;
+      try {
+        await withBiometricPrompt(attempt, () => saveBiometrics(biometricSecret, t.enable));
+      } catch (error) {
+        // SecureStore exposes cancellation through its native exception messages.
+        if (error instanceof Error && /user canceled the (operation|authentication)/i.test(error.message)) return;
+        throw new ApiError('BIOMETRICS_SETUP_FAILED');
+      }
+      if (!current()) return;
+      await request('enableBiometrics', { token: active.token, body: { installationSecret: installation, biometricSecret } });
+      await markBiometricsEnabled();
+      clearPendingSecret = false;
+      invalidatedBiometrics.current = false;
       setEnabled(true);
-      setSetup(false);
+      setBiometricsReset(false);
     } catch (error) {
-      await clearBiometrics();
-      if (errorCode(error) === 'PIN_LOCKED' || errorCode(error) === 'DEVICE_REVOKED') lock('activate');
-      throw error;
+      const code = errorCode(error);
+      if (current() && !rejectAccess(code)) {
+        setBiometricNotice(!enabled && (code === 'BIOMETRICS_INVALID' || code === 'INVALID_REQUEST')
+          ? 'BIOMETRICS_REGISTRATION_REJECTED' : code);
+      }
+    } finally {
+      if (clearPendingSecret) await clearBiometrics().catch(() => {});
     }
   }
 
@@ -358,7 +466,7 @@ export function AccessProvider({ children }: { children: ReactNode }) {
     if (code !== 'SESSION_EXPIRED' && code !== 'DEVICE_REVOKED' && code !== 'PIN_LOCKED') return false;
     if (epoch.current === financeEpoch && session.current === activeSession) {
       setNotice(code);
-      lock(code === 'SESSION_EXPIRED' ? 'unlock' : 'activate');
+      lock(code === 'SESSION_EXPIRED' ? 'unlock' : 'recovery');
     }
     return true;
   }
@@ -381,7 +489,7 @@ export function AccessProvider({ children }: { children: ReactNode }) {
     }
     zoneOperation.current = true;
     const revision = ++zoneRevision.current;
-    Keyboard.dismiss();
+    void KeyboardController.dismiss();
     setBusy(true);
     setTimeZoneNotice('');
     try {
@@ -418,19 +526,34 @@ export function AccessProvider({ children }: { children: ReactNode }) {
       <Text style={primary ? styles.primaryText : styles.link}>{label}</Text>
     </Pressable>
   );
-  const field = (label: string, value: string, setter: (value: string) => void,
-    options: { secure?: boolean; numeric?: boolean; email?: boolean } = {}) => (
+  const field = (label: string, value: string, setter: (value: string) => void, {
+    numeric, email, testID, ref, next,
+  }: { numeric?: boolean; email?: boolean; testID: string;
+    ref?: RefObject<ActivationInput | null>; next?: RefObject<ActivationInput | null> }) => (
     <View style={styles.field}>
       <Text style={styles.label}>{label}</Text>
-      <TextInput accessibilityLabel={label} value={value} onChangeText={setter} editable={!busy}
+      <TextInput ref={ref} accessibilityLabel={label} value={value} onChangeText={setter}
+        editable={!busy} testID={testID}
         style={styles.input} autoCorrect={false} autoCapitalize="none"
-        secureTextEntry={options.secure} maxLength={options.numeric ? 4 : undefined}
-        keyboardType={options.numeric ? 'number-pad' : options.email ? 'email-address' : 'default'} />
+        returnKeyType={numeric && Platform.OS === 'ios' ? undefined : next ? 'next' : 'done'}
+        submitBehavior={next ? 'submit' : 'blurAndSubmit'}
+        onSubmitEditing={next ? () => next.current?.focus() : undefined}
+        secureTextEntry={numeric} maxLength={numeric ? 4 : undefined}
+        keyboardType={numeric ? 'number-pad' : email ? 'email-address' : 'default'} />
     </View>
   );
 
   const noticeMessage = notice === 'onlineLogout' || notice === 'offlineLogout' ? t[notice] : t.errors[notice] ?? t.generic;
   const status = notice !== '' && <Text accessibilityRole="alert" style={styles.notice}>{noticeMessage}</Text>;
+  const switchLanguage = () => selectLanguage(lang === 'en' ? 'ru' : 'en');
+
+  function showAccessForm(next: Mode) {
+    if (operation.current) return;
+    setNotice('');
+    setPin('');
+    setConfirm('');
+    setMode(next);
+  }
 
   const settings = access && <SettingsScreen lang={lang} profile={access.profile} busy={busy} languageError={languageError}
     zoneEditing={timeZoneDraft !== null}
@@ -439,22 +562,17 @@ export function AccessProvider({ children }: { children: ReactNode }) {
       setTimeZoneNotice('');
       setTimeZoneDraft(timeZoneDraft === null ? access.profile.timeZone : null);
     }}
-    onBiometrics={() => {
-      if (enabled) void run(changeBiometrics);
-      else {
-        setPin('');
-        setSetup(!setup);
-        setNotice('');
-      }
-    }}
+    onBiometrics={() => void run(changeBiometrics)}
     onSignOut={() => void run(logout)}
-    notice={status}
+    notice={biometricNotice
+      ? <Text accessibilityRole="alert" style={styles.notice}>{t.errors[biometricNotice] ?? t.generic}</Text>
+      : status || (biometricsReset && <Text style={styles.label}>{t.biometricSetupAgain}</Text>)}
     zoneEditor={timeZoneDraft !== null || !!zoneMessage ? <View style={styles.settingsEditor}>
       {timeZoneDraft !== null && <>
         <Text style={styles.label}>{t.timeZoneIdentifier}</Text>
         <TextInput accessibilityLabel={t.timeZoneIdentifier} value={timeZoneDraft} onChangeText={setTimeZoneDraft}
           style={styles.input} editable={!busy} autoCorrect={false} autoCapitalize="none" maxLength={64}
-          returnKeyType="done" onSubmitEditing={Keyboard.dismiss} testID="finance-time-zone-input" />
+          returnKeyType="done" onSubmitEditing={() => void KeyboardController.dismiss()} testID="finance-time-zone-input" />
         {suggestedZone && suggestedZone !== timeZoneDraft && <FinanceButton title={t.usePhoneTimeZone + ' · ' + suggestedZone}
           onPress={() => setTimeZoneDraft(suggestedZone)} disabled={busy} />}
         <FinanceButton title={t.saveTimeZone} onPress={() => void saveTimeZone(timeZoneDraft)} primary disabled={busy}
@@ -464,12 +582,6 @@ export function AccessProvider({ children }: { children: ReactNode }) {
       {!!zoneMessage && <Text accessibilityRole={timeZoneNotice === 'saved' ? undefined : 'alert'}
         accessibilityLiveRegion="polite" style={timeZoneNotice === 'saved' ? styles.label : styles.notice}>{zoneMessage}</Text>}
     </View> : undefined}
-    biometricEditor={setup && <View style={styles.settingsEditor}>
-      {field(t.pin, pin, setPin, { secure: true, numeric: true })}
-      <FinanceButton title={t.enable} onPress={() => void run(changeBiometrics)}
-        primary disabled={busy || !/^\d{4}$/.test(pin)} testID="finance-enable-biometrics" />
-      <FinanceButton title={t.cancel} onPress={() => { setPin(''); setSetup(false); }} disabled={busy} />
-    </View>}
   />;
   const timeZoneSuggestion = access && !access.profile.timeZoneConfigured ? <View style={styles.zoneSuggestion}>
     <Text style={styles.label}>{t.timeZoneSuggestion}</Text>
@@ -479,34 +591,42 @@ export function AccessProvider({ children }: { children: ReactNode }) {
     {!!zoneMessage && <Text accessibilityRole="alert" style={styles.notice}>{zoneMessage}</Text>}
   </View> : undefined;
 
-  const signedOut = <SafeAreaView style={styles.safe}>
-    <ScrollView automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'} keyboardDismissMode="on-drag"
+  const showsUnlockScreen = mode === 'unlock' || mode === 'verify';
+  const showsActivationForm = mode === 'activate' || mode === 'recovery';
+  const showsKeyboardToolbar = showsActivationForm && Platform.OS === 'ios';
+  // The keyboard controller scrolls to the caret. Leave room for the rest of the input below it.
+  const keyboardBottomOffset = showsKeyboardToolbar ? 88 : 28;
+  const canReturnToPin = !!installation && !installationBlocked;
+  const signedOut = showsUnlockScreen ? <UnlockScreen key={mode} lang={lang} busy={busy} message={notice ? noticeMessage : ''}
+    languageError={languageError} onLanguage={switchLanguage} verifyingActivation={mode === 'verify'}
+    canReturnToPin={mode === 'verify' && canReturnToPin}
+    canUseBiometrics={mode === 'unlock' && enabled && !invalidatedBiometrics.current}
+    onPin={(pin) => run(() => unlock({ pin }))} onBiometrics={() => void run(() => unlock({ biometrics: true }))}
+    onRecovery={() => showAccessForm(installation ? 'recovery' : 'activate')}
+    onReturnToPin={() => showAccessForm('unlock')} /> : <SafeAreaView style={styles.safe}>
+    <KeyboardAwareScrollView bottomOffset={keyboardBottomOffset}
+      extraKeyboardSpace={showsKeyboardToolbar ? 42 : 0} disableScrollOnKeyboardHide
+      keyboardDismissMode={showsActivationForm ? 'none' : 'on-drag'}
       keyboardShouldPersistTaps="handled" contentContainerStyle={styles.page}>
       <View style={styles.header}>
         <FinanceBrand title={t.appName} />
         <Pressable accessibilityRole="button" accessibilityLabel={lang === 'en' ? 'Русский' : 'English'}
-          onPress={() => selectLanguage(lang === 'en' ? 'ru' : 'en')}>
+          onPress={switchLanguage}>
           <Text style={styles.language}>{lang === 'en' ? 'RU' : 'EN'}</Text>
         </Pressable>
       </View>
       {languageError && <Text accessibilityRole="alert" style={styles.notice}>{t.languageSaveFailed}</Text>}
-      {mode === 'activate' && <>
-        <Text style={styles.heading}>{t.activate}</Text>
-        {field(t.email, email, setEmail, { email: true })}
-        {field(t.code, code, setCode)}
-        {field(t.pin, pin, setPin, { secure: true, numeric: true })}
-        {field(t.repeat, confirm, setConfirm, { secure: true, numeric: true })}
+      {showsActivationForm && <>
+        <Text accessibilityRole="header" style={styles.heading}>{mode === 'recovery' ? t.recoverAccess : t.activate}</Text>
+        {mode === 'recovery' && <Text style={styles.label}>{t.recoveryHint}</Text>}
+        {field(t.email, email, setEmail, { email: true, testID: 'activation-email', next: codeInput })}
+        {field(t.code, code, setCode, { testID: 'activation-code', ref: codeInput, next: pinInput })}
+        {field(mode === 'recovery' ? t.newPin : t.pin, pin, setPin,
+          { numeric: true, testID: 'activation-pin', ref: pinInput, next: confirmInput })}
+        {field(t.repeat, confirm, setConfirm, { numeric: true, testID: 'activation-confirm', ref: confirmInput })}
         {action(t.activate, () => void run(activate), true)}
-        {installation && action(t.usePin, () => setMode('unlock'))}
-        {installation && action(t.reset, reset)}
-      </>}
-      {mode === 'unlock' && <>
-        <Text style={styles.heading}>{t.unlock}</Text>
-        {field(t.pin, pin, setPin, { secure: true, numeric: true })}
-        {action(t.usePin, () => void run(() => unlock(false)), true)}
-        {enabled && action(t.biometrics, () => void run(() => unlock(true)))}
-        {action(t.activateAgain, () => setMode('activate'))}
-        {action(t.reset, reset)}
+        {pendingInstallation && action(t.verifyActivationPin, () => showAccessForm('verify'))}
+        {canReturnToPin && action(t.usePin, () => showAccessForm('unlock'))}
       </>}
       {(mode === 'loading' || mode === 'checking') && <Text style={styles.heading}>{t.checking}</Text>}
       {mode === 'checking' && checkingFailed && session.current && <>
@@ -520,14 +640,30 @@ export function AccessProvider({ children }: { children: ReactNode }) {
         <Text style={styles.link}>{t.support}</Text>
       </Pressable>
       {supportOpen && <View style={styles.support}><SupportScreen lang={lang} /></View>}
-    </ScrollView>
+    </KeyboardAwareScrollView>
+    {showsKeyboardToolbar && <KeyboardToolbar doneText={t.done} />}
   </SafeAreaView>;
 
   return <AccessContext value={{ access, lang, settings, settingsBusy: busy, clearSettingsDraft,
     restoreSettings: settingsFocused.current, setSettingsFocused: (focused) => { settingsFocused.current = focused; },
-    startupReady, timeZoneSuggestion, signedOut }}>
+    startupReady, setSplashHidden, showsUnlockScreen, timeZoneSuggestion, signedOut }}>
     {children}
   </AccessContext>;
+}
+
+function waitForActive() {
+  return new Promise<void>((resolve) => {
+    const finish = () => {
+      listener.remove();
+      clearTimeout(timeout);
+      resolve();
+    };
+    const listener = AppState.addEventListener('change', (state) => {
+      if (state === 'active' || state === 'background') finish();
+    });
+    // Face ID can return a match before iOS finishes dismissing its success animation.
+    const timeout = setTimeout(finish, 5_000);
+  });
 }
 
 function errorCode(error: unknown) {

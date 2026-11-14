@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Keyboard, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
+import { KeyboardController } from 'react-native-keyboard-controller';
 import type { Language, Result } from '@teta/contracts';
 import type { FinanceDraft, TransactionFields } from './finance-commands';
 import { financeCopy } from './finance-copy';
@@ -40,7 +41,7 @@ export function AccountForm({ lang, today, disabled, onSubmit }: Props & { today
 
   function submit() {
     if (disabled) return;
-    Keyboard.dismiss();
+    void KeyboardController.dismiss();
     if (!name.trim()) return validate('invalidName');
     const startDate = start.value;
     if (!startDate) return validate('invalidDate');
@@ -120,7 +121,7 @@ export function TransactionForm({ lang, today, disabled, onSubmit, accounts, cat
 
   function submit() {
     if (disabled) return;
-    Keyboard.dismiss();
+    void KeyboardController.dismiss();
     if (!account) return setError('unavailable');
     const amountMinor = amount.value;
     if (amountMinor === undefined) return setError('invalidAmount');

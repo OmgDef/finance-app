@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useIsFocused } from 'expo-router';
-import { ActivityIndicator, Alert, Keyboard, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import { KeyboardController } from 'react-native-keyboard-controller';
 import type { Body, Language, Result } from '@teta/contracts';
 import { request } from './api';
 import { copy } from './copy';
@@ -270,7 +271,7 @@ function NameEditor({ name, lang, disabled, onSave, onCancel }: {
       <FinanceButton title={t.saveChanges} primary disabled={disabled} testID="finance-rename-save" onPress={() => {
         if (!value.trim()) return setInvalid(true);
         setInvalid(false);
-        Keyboard.dismiss();
+        void KeyboardController.dismiss();
         onSave(value.trim());
       }} />
       <FinanceButton title={copy[lang].cancel} disabled={disabled} onPress={onCancel} />
@@ -291,7 +292,7 @@ function StartDateEditor({ account, today, lang, disabled, onSave, onCancel }: {
     if (date > today && date !== account.startDate) return setError('futureStartDate');
     if ('maturityDate' in account && date > account.maturityDate) return setError('startAfterMaturity');
     setError(undefined);
-    Keyboard.dismiss();
+    void KeyboardController.dismiss();
     onSave(date);
   }
 
@@ -320,7 +321,7 @@ function CardEditor({ card, lang, disabled, onSave, onDelete, onCancel }: {
     if (!validColor) return setError('invalidCardColor');
     if (lastFour && !/^[0-9]{4}$/.test(lastFour)) return setError('invalidCardLastFour');
     setError(undefined);
-    Keyboard.dismiss();
+    void KeyboardController.dismiss();
     onSave({ name: name.trim(), appearance: color.trim().toUpperCase(), lastFour: lastFour || null });
   }
   return <View style={layout.form}>

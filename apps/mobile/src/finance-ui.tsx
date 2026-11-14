@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
-import { Image, Keyboard, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Image, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { TextInputProps } from 'react-native';
+import { KeyboardController } from 'react-native-keyboard-controller';
 import { FinanceIcon } from './finance-icon';
 import type { FinanceIconName } from './finance-icon';
 
@@ -38,8 +39,7 @@ export function FinanceField({ title, hint, ...input }: TextInputProps & { title
   return <View style={styles.field}>
     <Text style={styles.label}>{title}</Text>
     <TextInput {...input} returnKeyType={input.multiline ? undefined : 'done'}
-      onSubmitEditing={input.multiline ? undefined : Keyboard.dismiss}
-      inputAccessoryViewID={Platform.OS === 'ios' ? 'finance-keyboard' : undefined}
+      onSubmitEditing={input.multiline ? undefined : () => void KeyboardController.dismiss()}
       autoCorrect={input.keyboardType ? false : undefined} spellCheck={input.keyboardType ? false : undefined}
       accessibilityLabel={title} placeholderTextColor={palette.muted}
       style={styles.input} selectionColor={palette.accent} />
