@@ -80,7 +80,7 @@ function useWorkspaceModel(access: FinanceAccess, lang: Language) {
   const [categories, setCategories] = useState<Category[]>();
   const [listError, setListError] = useState('');
   const [categoryError, setCategoryError] = useState('');
-  const [refreshing, setRefreshing] = useState(false);
+  const [accountsLoading, setAccountsLoading] = useState(false);
   const [receipt, setReceipt] = useState<RouteReceipt | null>(null);
   const [destination, setDestination] = useState<Destination>();
   const [accountNotice, setAccountNotice] = useState<AccountNotice>();
@@ -97,7 +97,7 @@ function useWorkspaceModel(access: FinanceAccess, lang: Language) {
     const attempt = ++accountsRequest.current;
     const current = () => attempt === accountsRequest.current && access.isCurrent();
     setListError('');
-    setRefreshing(true);
+    setAccountsLoading(true);
     try {
       const result = await request('listAccounts', { token: access.token });
       if (current()) {
@@ -111,14 +111,14 @@ function useWorkspaceModel(access: FinanceAccess, lang: Language) {
         if (!access.onAccessFailure(code)) setListError(code);
       }
     } finally {
-      if (current()) setRefreshing(false);
+      if (current()) setAccountsLoading(false);
     }
   }
 
   function updateAccount(account: Account) {
     if (!access.isCurrent()) return;
     accountsRequest.current += 1;
-    setRefreshing(false);
+    setAccountsLoading(false);
     setAccounts((previous) => previous?.map((entry) => entry.accountId === account.accountId &&
       entry.accountVersion <= account.accountVersion ? account : entry));
   }
@@ -226,7 +226,7 @@ function useWorkspaceModel(access: FinanceAccess, lang: Language) {
   }, []);
 
   const blocked = command.busy || command.reading || command.pending !== null;
-  return { access, lang, blocked, accounts, cardPreviews, categories, activeAccounts, archivedAccounts, listError, categoryError, refreshing,
+  return { access, lang, blocked, accounts, cardPreviews, categories, activeAccounts, archivedAccounts, listError, categoryError, accountsLoading,
     receipt: receipt?.path === pathname ? receipt : undefined, setReceipt, revision, command,
     accountNotice, setAccountNotice, loadAccounts, loadCategories, updateAccount, invalidate, go,
     statisticsFilterEditor, openStatisticsFilters, lastExpenseAccountId,
@@ -292,13 +292,14 @@ function useFinanceRead<T>(key: string | undefined, revision: number, access: Fi
 function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page; inStack?: boolean; statisticsPreset?: StatisticsPreset }) {
   const { timeZoneSuggestion } = useAccessSession();
   const { access, lang, blocked, accounts, cardPreviews, categories, activeAccounts, archivedAccounts, listError, categoryError,
-    refreshing, receipt, setReceipt, revision, command, accountNotice, setAccountNotice,
+    accountsLoading, receipt, setReceipt, revision, command, accountNotice, setAccountNotice,
     loadAccounts, loadCategories, updateAccount, invalidate, go, openStatisticsFilters, lastExpenseAccountId,
   } = useFinanceWorkspace();
   const router = useRouter();
   const { bottom } = useSafeAreaInsets();
   const [footerHeight, setFooterHeight] = useState(0);
   const [localWrite, setLocalWrite] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [afterSave, setAfterSave] = useState<{ page: FinancePage; replace?: boolean; dismissTo?: boolean }>();
   const [scheduleRefresh, setScheduleRefresh] = useState(0);
   const [paymentsRefresh, setPaymentsRefresh] = useState(0);
@@ -419,8 +420,9 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
   const [profileRefresh, setProfileRefresh] = useState(0);
 
   function refresh() {
-    if (writing) return;
-    void loadAccounts();
+    if (writing || refreshing) return;
+    setRefreshing(true);
+    void loadAccounts().finally(() => setRefreshing(false));
     if (!categories || page.name === 'payments') void loadCategories();
     if (showOverview) {
       setProfileRefresh((value) => value + 1);
@@ -653,7 +655,7 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
           </View>
         </View>)}
       </>}
-      {!accounts && refreshing && <ActivityIndicator color={palette.accent} accessibilityLabel={t.loading} />}
+      {!accounts && accountsLoading && <ActivityIndicator color={palette.accent} accessibilityLabel={t.loading} />}
       </>}
       {page.name === 'products' && <>
         {timeZoneSuggestion}
@@ -709,7 +711,7 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
           <FinanceButton title={copy[lang].retry} onPress={() => void loadCategories()} />
         </View>}
         <ScheduleScreen page={page} access={access} accounts={accounts} categories={categories} lang={lang}
-          disabled={blocked || refreshing} visible={focused} refreshSignal={scheduleRefresh + revision} commandError={command.error}
+          disabled={blocked || accountsLoading} visible={focused} refreshSignal={scheduleRefresh + revision} commandError={command.error}
           onSubmit={command.submit} onPage={(next) => {
             if (financePath(next) !== financePath(page)) go(next);
             else router.setParams({ accountId: next.accountId ?? '', offset: next.offset ?? 0, section: next.section ?? 'dates' });
