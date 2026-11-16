@@ -543,6 +543,18 @@ export const routes = {
     description: 'Returns the balance and account version from the same database snapshot, with the annual rate and maturity date for deposits.',
     failures: { 404: 'NOT_FOUND when the account is absent or belongs to another user.' },
   },
+  getAccountBalanceSeries: {
+    ...route(endpoints.getAccountBalanceSeries, 'mobile', 'Read six months of balances for an owned account', empty,
+      T.Object({ accountId: id, accountVersion: ledgerVersion, currency, points: T.Array(T.Object({ date: financialDate, balanceMinor }),
+        { minItems: 1 }) })),
+    params: accountParams,
+    description: 'Returns end-of-day balances from one ledger snapshot, in ascending date order. Includes the first day, ' +
+      'days with ledger activity, and the last day. The window ends on the current profile date or the latest ledger date ' +
+      'if later and begins six months earlier or at the account start if later. The last point is the current balance ' +
+      'at the returned account version. Includes transfers and reconciliations. Uses current posted transaction versions. ' +
+      'Archived accounts remain readable.',
+    failures: accountNotFound,
+  },
   renameAccount: {
     ...route(endpoints.renameAccount, 'mobile', 'Rename an owned active account',
       T.Object({ name: accountName, expectedAccountVersion: ledgerVersion }, { additionalProperties: false }), accountBalance),

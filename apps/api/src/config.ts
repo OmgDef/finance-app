@@ -2,6 +2,7 @@ export interface Config {
   databaseUrl: string;
   apiOrigin: string;
   adminOrigin: string;
+  adminUnderPath: boolean;
   proxyIp: string | false;
   accessKey: Buffer;
   totpKey: Buffer;
@@ -28,12 +29,19 @@ export function configFromEnv(env = process.env): Config {
   }
   const apiOrigin = origin('API_ORIGIN');
   const adminOrigin = origin('ADMIN_ORIGIN');
-  if (apiOrigin === adminOrigin) throw new Error('Expected separate API and admin origins');
+  const adminUnderPath = env.ADMIN_UNDER_PATH === '1';
+  if (adminUnderPath) {
+    if (apiOrigin !== adminOrigin || !apiOrigin.startsWith('https://')) {
+      throw new Error('Expected a shared HTTPS origin for path-based admin');
+    }
+  } else if (apiOrigin === adminOrigin) {
+    throw new Error('Expected separate API and admin origins');
+  }
   const accessKey = key('ACCESS_KEY');
   const totpKey = key('TOTP_KEY');
   if (accessKey.equals(totpKey)) throw new Error('Expected separate keys');
   const recoveryVersion = env.RECOVERY_VERSION ?? '1';
   if (!/^[1-9][0-9]{0,9}$/.test(recoveryVersion)) throw new Error('Invalid RECOVERY_VERSION');
-  return { databaseUrl: required('DATABASE_URL'), apiOrigin, adminOrigin,
+  return { databaseUrl: required('DATABASE_URL'), apiOrigin, adminOrigin, adminUnderPath,
     accessKey, totpKey, recoveryVersion, proxyIp: env.PROXY_IP || false };
 }

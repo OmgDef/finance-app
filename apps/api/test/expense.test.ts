@@ -684,6 +684,13 @@ test('Finance API against migrated MySQL', async (t) => {
       amountMinor: deltaMinor, explanation: 'Checked statement', actorRole: 'user' });
     assert.equal(entries.find(({ type }) => type === 'income')?.amountMinor, '9007199254740993');
     assert.deepEqual(entries.at(-1), { id: accountId, type: 'opening', date: '2027-01-01', amountMinor: '100000' });
+    const series = await send(app, 'getAccountBalanceSeries', undefined, session, accountId);
+    assert.equal(series.statusCode, 200, series.body);
+    assert.deepEqual(series.json<Result<'getAccountBalanceSeries'>>().points, [
+      { date: '2027-01-01', balanceMinor: '100000' },
+      { date: '2027-01-31', balanceMinor: '9007199254840993' },
+      { date: '2027-02-01', balanceMinor: '9007199254830000' },
+    ]);
 
     for (const [id, amountMinor] of [[alternativeId, '-3500'], [destinationId, '3200']]) {
       const result = await history(id);
@@ -693,6 +700,30 @@ test('Finance API against migrated MySQL', async (t) => {
       const current = await send(app, 'getAccountBalance', undefined, session, id);
       assert.equal(current.json<Result<'getAccountBalance'>>().balanceMinor, '0');
     }
+  });
+
+  await t.test('Account balance series carries older activity into the six-month window', async () => {
+    const { session, newKey } = await activateOwner();
+    const created = await send(app, 'createAccount', { name: 'Long history', currency: 'USD', startDate: '2026-01-01',
+      openingBalanceMinor: '100000', idempotencyKey: newKey() }, session);
+    assert.equal(created.statusCode, 200, created.body);
+    const { accountId } = created.json<Result<'createAccount'>>();
+    for (const date of ['2026-07-31', '2026-08-01', '2026-12-10']) {
+      const result = await send(app, 'recordTransaction', { ...expenseFor(accountId, newKey()), date }, session);
+      assert.equal(result.statusCode, 200, result.body);
+    }
+    const result = await send(app, 'getAccountBalanceSeries', undefined, session, accountId);
+    assert.equal(result.statusCode, 200, result.body);
+    const current = await send(app, 'getAccountBalance', undefined, session, accountId);
+    assert.equal(current.statusCode, 200, current.body);
+    const { accountVersion, balanceMinor } = current.json<Result<'getAccountBalance'>>();
+    assert.deepEqual(result.json(), { accountId, accountVersion, currency: 'USD', points: [
+      { date: '2026-08-01', balanceMinor: '80000' },
+      { date: '2026-12-10', balanceMinor: '70000' },
+      { date: '2027-02-01', balanceMinor },
+    ] });
+    const stranger = await activateOwner();
+    expectError(await send(app, 'getAccountBalanceSeries', undefined, stranger.session, accountId), 404, 'NOT_FOUND');
   });
 
   await t.test('Account history cursor paginates same-day operations without omissions', async () => {
@@ -720,6 +751,9 @@ test('Finance API against migrated MySQL', async (t) => {
     assert.deepEqual(beyondOpening.json(), { accountId, currency: 'EUR', entries: [], next: null });
     expectError(await history(`2027-02-30.${accountId}`), 400, 'INVALID_REQUEST');
     expectError(await history('malformed'), 400, 'INVALID_REQUEST');
+    const series = await send(app, 'getAccountBalanceSeries', undefined, session, accountId);
+    assert.equal(series.statusCode, 200, series.body);
+    assert.deepEqual(series.json<Result<'getAccountBalanceSeries'>>().points.at(-1), { date: '2027-02-01', balanceMinor: '99949' });
   });
 
   await t.test('Two linked cards share a live balance and the currency summary counts each account once', async () => {

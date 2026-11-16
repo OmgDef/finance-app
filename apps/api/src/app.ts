@@ -15,7 +15,7 @@ import type { Db } from './db.ts';
 import { AccessError, sessionExpired } from './errors.ts';
 import { exchangeRates } from './exchange-rates.ts';
 import {
-  changeTransaction, createAccount, createAccountCard, deleteAccountCard, getAccountBalance, getCurrencySummary,
+  changeTransaction, createAccount, createAccountCard, deleteAccountCard, getAccountBalance, getAccountBalanceSeries, getCurrencySummary,
   listAccountCards, listAccounts, listBalanceAdjustments, listCategories, listMobileAccounts, listTransactionVersions, previewBalanceAdjustment,
   previewTransactionChange, reconcileAccountBalance, recordTransaction, renameAccount, setAccountArchived, updateAccountCard,
   updateAccountStartDate,
@@ -55,6 +55,7 @@ export function buildApp(config: Config, db: Db, clock = Date.now, logger = fals
   const admin = adminAccess(db, config, clock);
   const apiOrigin = new URL(config.apiOrigin);
   const adminOrigin = new URL(config.adminOrigin);
+  const adminPathPrefix = config.adminUnderPath ? '/admin/api/v1/admin/' : '/api/v1/admin/';
   const secureCookies = adminOrigin.protocol === 'https:';
   const adminCookie = secureCookies ? '__Host-teta-admin' : 'teta-local-admin';
   const browserCookie = secureCookies ? '__Host-teta-browser' : 'teta-local-browser';
@@ -64,7 +65,7 @@ export function buildApp(config: Config, db: Db, clock = Date.now, logger = fals
   app.addHook('onRequest', async (request, reply) => {
     reply.header('Cache-Control', 'no-store');
     if (request.routeOptions.url && request.routeOptions.url !== '*') {
-      const expected = request.routeOptions.url.startsWith('/api/v1/admin/') ? adminOrigin : apiOrigin;
+      const expected = request.routeOptions.url.startsWith(adminPathPrefix) ? adminOrigin : apiOrigin;
       if (request.headers.host !== expected.host || `${request.protocol}:` !== expected.protocol) {
         throw new AccessError(404, 'NOT_FOUND');
       }
@@ -87,7 +88,8 @@ export function buildApp(config: Config, db: Db, clock = Date.now, logger = fals
     const route = routes[key];
     const changes = route.method !== 'GET';
     app.route<{ Body: Body<K>; Params: Params<K> }>({
-      method: route.method, url: route.url,
+      method: route.method,
+      url: config.adminUnderPath && route.url.startsWith('/api/v1/admin/') ? '/admin' + route.url : route.url,
       ...((key === 'replaceScheduleRule' || key === 'adminReplaceScheduleRule') && { bodyLimit: 256 * 1024 }),
       ...((key === 'adminCreateFaq' || key === 'adminUpdateFaq') && { bodyLimit: 64 * 1024 }),
       schema: {
@@ -148,6 +150,8 @@ export function buildApp(config: Config, db: Db, clock = Date.now, logger = fals
     getCurrencySummary(tx, user.id)));
   add('getAccountBalance', async (request) => mobile.withSession(bearer(request), (tx, user) =>
     getAccountBalance(tx, user.id, request.params.accountId)));
+  add('getAccountBalanceSeries', async (request) => mobile.withSession(bearer(request), (tx, user, _device, now) =>
+    getAccountBalanceSeries(tx, user.id, request.params.accountId, now)));
   add('renameAccount', async (request) => renameAccount(mobileCommandAccess(request), request.params.accountId, request.body));
   add('updateAccountStartDate', async (request) =>
     updateAccountStartDate(mobileCommandAccess(request), request.params.accountId, request.body));

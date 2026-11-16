@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Body, Params, Result } from '@teta/contracts';
 import { sql } from 'drizzle-orm';
+import type { SQL } from 'drizzle-orm';
 import { readProfileCalendar } from './profile.ts';
 import { retryFinanceWrite, runCommand } from './commands.ts';
 import type { ActorRole, WithCommandAccess } from './commands.ts';
@@ -43,10 +44,11 @@ type CardParams = Params<'updateAccountCard'>;
 const maxMinor = 9223372036854775807n;
 const minMinor = -9223372036854775808n;
 
-const currentPostedMovements = sql`FROM movements m
+const postedMovementsFor = (accountId: SQL) => sql`FROM movements m
   JOIN transactions t ON t.id = m.transaction_id AND t.current_version = m.transaction_version
   JOIN transaction_versions v ON v.transaction_id = m.transaction_id AND v.version = m.transaction_version
-  WHERE m.account_id = a.id AND v.status = 'posted'`;
+  WHERE m.account_id = ${accountId} AND v.status = 'posted'`;
+const currentPostedMovements = postedMovementsFor(sql`a.id`);
 const accountBalanceMinor = sql`a.opening_balance_minor + COALESCE((
   SELECT SUM(m.amount_minor) ${currentPostedMovements}
 ), 0) + COALESCE((
@@ -75,6 +77,44 @@ export async function getAccountBalance(tx: Tx, userId: string, accountId: strin
   const account = await one<AccountRow>(tx, sql`${accountBalances} WHERE a.id = ${accountId} AND a.user_id = ${userId}`);
   if (!account) throw new AccessError(404, 'NOT_FOUND');
   return formatAccountBalance(account);
+}
+
+export async function getAccountBalanceSeries(tx: Tx, userId: string, accountId: string,
+  now: number,
+): Promise<Result<'getAccountBalanceSeries'>> {
+  type Series = Result<'getAccountBalanceSeries'>;
+  type DailyChange = Pick<Series, 'accountVersion' | 'currency'> & { date: string; throughDate: string; deltaMinor: string };
+  const today = await profileDate(tx, userId, now);
+  // The access transaction uses READ COMMITTED. Keep the ledger and version in one statement snapshot.
+  const changes = await rows<DailyChange>(tx, sql`
+    WITH owned_account AS (
+      SELECT id, version, currency, start_date, opening_balance_minor FROM accounts
+      WHERE id = ${accountId} AND user_id = ${userId}
+    ), ledger AS (
+      SELECT start_date AS date, opening_balance_minor AS delta FROM owned_account
+      UNION ALL
+      SELECT b.financial_date, b.delta_minor FROM balance_adjustments b JOIN owned_account a ON a.id = b.account_id
+      UNION ALL
+      SELECT v.financial_date, m.amount_minor ${postedMovementsFor(sql`(SELECT id FROM owned_account)`)}
+    ), period_end AS (
+      SELECT GREATEST(CAST(${today} AS DATE), MAX(date)) AS throughDate FROM ledger
+    ), daily_changes AS (
+      SELECT GREATEST(l.date, DATE_SUB(p.throughDate, INTERVAL 6 MONTH)) AS balance_date, SUM(l.delta) AS delta
+      FROM ledger l CROSS JOIN period_end p GROUP BY balance_date
+    )
+    SELECT a.version AS accountVersion, a.currency, CAST(d.balance_date AS CHAR) AS date,
+      CAST(p.throughDate AS CHAR) AS throughDate, CAST(d.delta AS CHAR) AS deltaMinor
+    FROM daily_changes d CROSS JOIN owned_account a CROSS JOIN period_end p ORDER BY d.balance_date`);
+  const first = changes[0];
+  if (!first) throw new AccessError(404, 'NOT_FOUND');
+
+  let balance = 0n;
+  const points = changes.map(({ date, deltaMinor }) => {
+    balance += BigInt(deltaMinor);
+    return { date, balanceMinor: balance.toString() };
+  });
+  if (points.at(-1)?.date !== first.throughDate) points.push({ date: first.throughDate, balanceMinor: balance.toString() });
+  return { accountId, accountVersion: first.accountVersion, currency: first.currency, points };
 }
 
 export async function listAccounts(tx: Tx, userId: string) {

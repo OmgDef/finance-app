@@ -1,0 +1,8 @@
+[Unit]
+Description=Renew the TetaFinance TLS certificate
+Wants=network-online.target
+After=network-online.target nginx.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/certbot renew --quiet --config-dir /etc/letsencrypt-teta --work-dir /var/lib/letsencrypt-teta --logs-dir /var/log/letsencrypt-teta --deploy-hook /opt/tetafinance/bin/reload-nginx.sh

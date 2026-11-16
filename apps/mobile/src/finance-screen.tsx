@@ -5,7 +5,7 @@ import {
   ActivityIndicator, Alert, Platform, Pressable, RefreshControl,
   StyleSheet, Text, View,
 } from 'react-native';
-import { KeyboardAwareScrollView, KeyboardController, KeyboardToolbar } from 'react-native-keyboard-controller';
+import { KeyboardController, KeyboardToolbar } from 'react-native-keyboard-controller';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAccessSession } from './access-session';
 import type { Language, Result } from '@teta/contracts';
@@ -18,7 +18,7 @@ import type { CommandResult, FinanceAccess, FinanceCommand, TransactionFields } 
 import { financeCopy } from './finance-copy';
 import type { FinanceCopyKey } from './finance-copy';
 import { BalanceCard, CashFlowCard, ExchangeRatesCard, NextPaymentCard, OverviewAccountCard } from './finance-dashboard';
-import { addFinancialDays, formatAmount, formatFinancialDate, formatMoney, formatProfileMoment, formatRate } from './finance-format';
+import { formatAmount, formatFinancialDate, formatMoney, formatProfileMoment, formatRate, recentStatisticsPeriod } from './finance-format';
 import { AccountForm, TransactionForm } from './finance-forms';
 import { FinanceIcon } from './finance-icon';
 import { PaymentsScreen } from './finance-payments';
@@ -28,11 +28,11 @@ import { financeHref, financePage, financePath, routeParameter } from './finance
 import type { FinancePage, FinanceRoute } from './finance-navigation';
 import { scheduleCopy } from './finance-schedule-copy';
 import { StatisticsScreen, useStatistics } from './finance-statistics';
-import type { StatisticsPreset } from './finance-statistics';
+import type { StatisticsFilterEditor, StatisticsPreset } from './finance-statistics';
 import { appTabs } from './finance-tabs';
 import type { FinanceTab } from './finance-tabs';
 import { revisionFields, TransactionVersions } from './finance-transaction';
-import { FinanceAlert, FinanceButton, palette, styles } from './finance-ui';
+import { FinanceAlert, FinanceBrand, FinanceButton, FinanceScrollView, palette, styles } from './finance-ui';
 import { SupportScreen } from './support-screen';
 
 type Account = Result<'listAccounts'>['accounts'][number];
@@ -80,6 +80,7 @@ function useWorkspaceModel(access: FinanceAccess, lang: Language) {
   const [receipt, setReceipt] = useState<RouteReceipt | null>(null);
   const [destination, setDestination] = useState<Destination>();
   const [accountNotice, setAccountNotice] = useState<AccountNotice>();
+  const [statisticsFilterEditor, setStatisticsFilterEditor] = useState<StatisticsFilterEditor>();
   const [revision, setRevision] = useState(0);
   const accountsRequest = useRef(0);
   const categoriesRequest = useRef(0);
@@ -139,6 +140,11 @@ function useWorkspaceModel(access: FinanceAccess, lang: Language) {
     router.push(financeHref(next));
   }
 
+  function openStatisticsFilters(editor: StatisticsFilterEditor) {
+    setStatisticsFilterEditor(editor);
+    router.navigate('/(app)/statistics-filters');
+  }
+
   function invalidate() {
     setRevision((value) => value + 1);
   }
@@ -183,6 +189,7 @@ function useWorkspaceModel(access: FinanceAccess, lang: Language) {
 
   useEffect(() => {
     if (!command.reading) command.clearError();
+    if (pathname !== '/statistics-filters') setStatisticsFilterEditor(undefined);
     setAccountNotice((notice) => notice && pathname.startsWith('/accounts/' + encodeURIComponent(notice.accountId) + '/')
       ? notice : undefined);
     setReceipt((previous) => {
@@ -204,6 +211,7 @@ function useWorkspaceModel(access: FinanceAccess, lang: Language) {
   return { access, lang, blocked, accounts, cardPreviews, categories, activeAccounts, archivedAccounts, listError, categoryError, refreshing,
     receipt: receipt?.path === pathname ? receipt : undefined, setReceipt, revision, command,
     accountNotice, setAccountNotice, loadAccounts, loadCategories, updateAccount, invalidate, go,
+    statisticsFilterEditor, openStatisticsFilters,
   };
 }
 
@@ -267,7 +275,7 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
   const { timeZoneSuggestion } = useAccessSession();
   const { access, lang, blocked, accounts, cardPreviews, categories, activeAccounts, archivedAccounts, listError, categoryError,
     refreshing, receipt, setReceipt, revision, command, accountNotice, setAccountNotice,
-    loadAccounts, loadCategories, updateAccount, invalidate, go,
+    loadAccounts, loadCategories, updateAccount, invalidate, go, openStatisticsFilters,
   } = useFinanceWorkspace();
   const router = useRouter();
   const [localWrite, setLocalWrite] = useState(false);
@@ -292,12 +300,12 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
   const { today, timeZone } = access.profile;
   const cashFlow = useFinanceRead(showOverview ? today : undefined, revision, access, (throughDate) =>
     request('getStatistics', { token: access.token,
-      query: new URLSearchParams({ throughDate, fromDate: addFinancialDays(throughDate, -29), byWeek: 'true' }) }), focused);
+      query: new URLSearchParams({ ...recentStatisticsPeriod(throughDate), byWeek: 'true' }) }), focused);
   const exchangeRates = useFinanceRead(showOverview ? 'rates' : undefined, 0, access, () =>
     request('getExchangeRates', { token: access.token }), focused);
   const nextPayment = useFinanceRead(showOverview ? today + ':' + timeZone : undefined, revision, access, () =>
     request('getNextPayment', { token: access.token }), focused);
-  const scroll = useRef<ComponentRef<typeof KeyboardAwareScrollView>>(null);
+  const scroll = useRef<ComponentRef<typeof FinanceScrollView>>(null);
   const accountId = 'accountId' in page ? page.accountId : null;
   const account = accountId ? accounts?.find((entry) => entry.accountId === accountId) : undefined;
   const historyId = page.name === 'history' ? page.accountId : undefined;
@@ -305,10 +313,14 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
   const history = useFinanceRead(historyId, revision, access, (accountId, before) =>
     request('listAccountHistory', { token: access.token, params: { accountId },
       query: before ? new URLSearchParams({ before }) : undefined }));
+  const balanceSeries = useFinanceRead(historyId && account ? `${historyId}:${today}:${account.accountVersion}` : undefined,
+    revision, access, (key) => request('getAccountBalanceSeries', {
+      token: access.token, params: { accountId: key.split(':')[0] },
+    }));
   const month = access.profile.today.slice(0, 7);
   const monthlyActivity = useFinanceRead(historyId && month + ':' + historyId, revision, access, (key) => {
     const [, accountId] = key.split(':');
-    return request('getStatistics', { token: access.token, query: new URLSearchParams({ accountId }) });
+    return request('getStatistics', { token: access.token, query: new URLSearchParams({ accountId, byWeek: 'true' }) });
   });
   const transaction = useFinanceRead(transactionId, revision, access, (transactionId) =>
     request('listTransactionVersions', { token: access.token, params: { transactionId } }));
@@ -337,6 +349,7 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
   const transactionChanged = command.error === 'VERSION_CONFLICT' || command.error === 'TRANSACTION_VOID' ||
     (page.name === 'revise' && page.version !== undefined && !!activeTransaction && page.version !== activeTransaction.transactionVersion);
   const formKind = page.name === 'record' ? page.kind : page.name === 'revise' ? initialRevision?.type : undefined;
+  const defaultCategoryId = page.name === 'record' ? page.categoryId : undefined;
   const receiptResult = receipt?.result;
   const receiptAccounts = receiptResult && ('fromAccount' in receiptResult ? [receiptResult.fromAccount, receiptResult.toAccount]
     : 'accounts' in receiptResult ? receiptResult.accounts : 'balanceMinor' in receiptResult ? [receiptResult] : []);
@@ -368,10 +381,6 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
     else returnTo(afterSave.page);
   }, [afterSave, writing, focused]);
 
-  function openRecord(kind: TransactionFields['type'], accountId: string | null) {
-    go({ name: 'record', kind, accountId });
-  }
-
   function submitTransaction(fields: TransactionFields) {
     if (page.name === 'revise') {
       if (!activeTransaction || transactionChanged) return;
@@ -388,14 +397,17 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
   function refresh() {
     if (writing) return;
     void loadAccounts();
-    if (!categories) void loadCategories();
+    if (!categories || page.name === 'payments') void loadCategories();
     if (showOverview) {
       void cashFlow.load();
       void exchangeRates.load();
       void nextPayment.load();
     }
-    if (historyId) void history.load();
-    if (historyId) void monthlyActivity.load();
+    if (historyId) {
+      void history.load();
+      void balanceSeries.load();
+      void monthlyActivity.load();
+    }
     if (transactionId) void transaction.load();
     if (page.name === 'schedule') setScheduleRefresh((signal) => signal + 1);
     if (page.name === 'payments') setPaymentsRefresh((signal) => signal + 1);
@@ -428,11 +440,11 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
   }
 
   if (page.name === 'history') {
-    return <SafeAreaView style={layout.container} edges={['left', 'right', 'bottom']}>
+    return <SafeAreaView style={layout.container} edges={['left', 'right']}>
       <Stack.Screen options={{ title: screenTitle(), gestureEnabled: !writing }} />
       <AccountOverview key={page.accountId} account={account} depositTerms={account ? depositTerms(account, lang) : ''}
         lang={lang} categories={categories} month={monthlyActivity.data?.fromDate.slice(0, 7) ?? month}
-        totals={monthlyActivity.data?.totals}
+        balanceSeries={balanceSeries.data} balanceSeriesError={!!balanceSeries.error} monthlyActivity={monthlyActivity.data}
         totalsError={!!monthlyActivity.error} history={history.data} historyBusy={history.busy} historyError={!!history.error}
         accountError={listError ? t.accountOverviewError : accounts && !account ? t.unavailable : undefined}
         refreshing={refreshing} onRefresh={refresh}
@@ -449,18 +461,18 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
     </SafeAreaView>;
   }
 
-  return <SafeAreaView style={layout.container} edges={inStack ? ['left', 'right', 'bottom'] : ['top', 'left', 'right']}>
+  return <SafeAreaView style={layout.container} edges={inStack ? ['left', 'right'] : ['top', 'left', 'right']}>
     {inStack && <Stack.Screen options={{ title: screenTitle(), gestureEnabled: !writing }} />}
-    <KeyboardAwareScrollView ref={scroll} key={page.name + (historyId ?? '')}
+    <FinanceScrollView ref={scroll} key={page.name + (historyId ?? '')} nativeTab={!inStack}
       bottomOffset={showKeyboardToolbar ? 64 : 12} extraKeyboardSpace={showKeyboardToolbar ? 42 : 0}
       disableScrollOnKeyboardHide
-      contentInsetAdjustmentBehavior={inStack ? 'never' : 'automatic'}
       keyboardDismissMode={isForm ? 'none' : 'on-drag'}
-      keyboardShouldPersistTaps="handled" contentContainerStyle={styles.page}
+      keyboardShouldPersistTaps="handled"
       refreshControl={financeTab || page.name === 'archive' || page.name === 'accountSettings' || page.name === 'transaction' ||
         (page.name === 'schedule' && !page.editor && !page.skipDate)
         ? <RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={palette.accent} colors={[palette.accent]} />
         : undefined}>
+      {showOverview && <FinanceBrand title={copy[lang].appName} />}
       {showingSupport && focused && <SupportScreen lang={lang} showHeading={false} />}
       {!showingSupport && <>
       {command.reading && <View style={layout.panel}>
@@ -568,6 +580,9 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
       {page.name === 'products' && <>
         {timeZoneSuggestion}
         {accounts && <BalanceCard accounts={activeAccounts} lang={lang} />}
+        <CashFlowCard read={cashFlow} accounts={accounts && activeAccounts} lang={lang}
+          onStatistics={(preset) => router.navigate({ pathname: '/(app)/(tabs)/statistics',
+            params: { ...preset, overview: String(Date.now()) } })} />
         {accounts && <View style={layout.section}>
           <Text accessibilityRole="header" style={styles.section}>{t.myAccounts}</Text>
           {activeAccounts.length ? activeAccounts.map((entry) => <OverviewAccountCard key={entry.accountId}
@@ -580,9 +595,6 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
             <Text style={styles.meta}>{t.archived}</Text>
           </Pressable>}
         </View>}
-        <CashFlowCard read={cashFlow} accounts={accounts && activeAccounts} lang={lang}
-          onStatistics={(preset) => router.navigate({ pathname: '/(app)/(tabs)/statistics',
-            params: { ...preset, overview: String(Date.now()) } })} />
         <ExchangeRatesCard read={exchangeRates} lang={lang} />
         <NextPaymentCard read={nextPayment} categories={categories} lang={lang}
           onSchedule={(ruleId, date) => go({ name: 'schedule', accountId: null, ruleId,
@@ -601,12 +613,12 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
           <FinanceButton title={copy[lang].retry} onPress={() => void loadCategories()} />
         </View>}
         <StatisticsScreen statistics={statistics} accounts={accounts} categories={categories} lang={lang}
-          today={access.profile.today} scrollToTop={() => scroll.current?.scrollTo({ y: 0, animated: false })}
+          onEditFilters={openStatisticsFilters} scrollToTop={() => scroll.current?.scrollTo({ y: 0, animated: false })}
           onTransaction={({ transactionId }) => go({ name: 'transaction', transactionId })} />
       </>}
       {page.name === 'payments' && <PaymentsScreen access={access} lang={lang} accountCount={activeAccounts.length}
         categories={categories} blocked={blocked} focused={focused} refreshSignal={paymentsRefresh}
-        onRecord={(kind) => openRecord(kind, null)}
+        onRecord={(kind, categoryId) => go({ name: 'record', kind, accountId: null, categoryId })}
         onSchedule={(ruleId) => go({ name: 'schedule', accountId: null, ruleId })} />}
       {page.name === 'schedule' && <>
         {categoryError && <View style={layout.section}>
@@ -674,10 +686,11 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
         {formKind !== 'transfer' && !categories && !categoryError &&
           <ActivityIndicator color={palette.accent} accessibilityLabel={t.loading} />}
         {accounts && (categories || formKind === 'transfer') && !archivedTransaction && <TransactionForm
-          key={page.name === 'revise' ? transactionId : formKind} lang={lang} today={access.profile.today}
+          key={page.name === 'revise' ? transactionId : [formKind, defaultCategoryId].join(':')}
+          lang={lang} today={access.profile.today}
           disabled={blocked || transactionChanged || transaction.busy || !!transaction.error} onSubmit={submitTransaction} accounts={activeAccounts}
           categories={categories ?? []} selectedAccountId={page.name === 'record' ? page.accountId : null}
-          kind={formKind} initial={page.name === 'revise' ? initialRevision : undefined} />}
+          kind={formKind} defaultCategoryId={defaultCategoryId} initial={page.name === 'revise' ? initialRevision : undefined} />}
       </>}
       {page.name === 'transaction' && <>
         {activeTransaction && <>
@@ -698,7 +711,7 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
           <TransactionVersions history={activeTransaction} lang={lang} accounts={accounts ?? []} categories={categories ?? []} />
         </>}
       </>}
-    </KeyboardAwareScrollView>
+    </FinanceScrollView>
     {focused && showKeyboardToolbar && <KeyboardToolbar>
       <KeyboardToolbar.Content>
         <Pressable accessibilityRole="button" onPress={() => void KeyboardController.dismiss()}

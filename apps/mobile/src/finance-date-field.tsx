@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import { Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { KeyboardController } from 'react-native-keyboard-controller';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import type { Language } from '@teta/contracts';
 import { copy } from './copy';
 import { financeCopy } from './finance-copy';
@@ -86,26 +86,28 @@ export function FinanceDateField({ title, lang, value, today, onChange, onClear,
       <FinanceIcon name="calendar" color={palette.accent} size={18} />
     </Pressable>
     {draft !== undefined && !unavailable && <Modal transparent animationType="fade" onRequestClose={close}>
-      <View style={layout.modal}>
+      <SafeAreaProvider style={layout.modal}>
         <Pressable accessible={false} onPress={close} style={layout.backdrop} />
-        <SafeAreaView edges={['bottom']} style={layout.sheet} accessibilityViewIsModal>
-          <ScrollView bounces={false} contentContainerStyle={layout.sheetContent}>
-            <Text style={styles.section} accessibilityRole="header">{title}</Text>
-            <DateTimePicker mode="date" display="inline" locale={lang === 'ru' ? 'ru-RU' : 'en-US'}
-              style={layout.calendar} themeVariant="light" accentColor={palette.accent}
-              value={dateForPicker(clamp(draft), true)}
-              minimumDate={new Date(min + 'T00:00:00Z')} maximumDate={new Date(max + 'T23:59:59.999Z')} timeZoneName="UTC"
-              onValueChange={(_, date) => setDraft(dateFromPicker(date, true))} />
-            <View style={layout.actions}>
-              <FinanceButton title={copy[lang].cancel} onPress={close} testID={testID + '-cancel'} />
-              {allowClear && <FinanceButton title={t.clearDate} testID={testID + '-clear'}
-                onPress={() => { onClear?.(); close(); }} />}
-              <FinanceButton title={copy[lang].done} primary testID={testID + '-done'}
-                onPress={() => { onChange(clamp(draft)); close(); }} />
-            </View>
+        <View style={layout.sheet} accessibilityViewIsModal>
+          <ScrollView bounces={false} contentInsetAdjustmentBehavior="never">
+            <SafeAreaView edges={['bottom']} style={layout.sheetContent}>
+              <Text style={styles.section} accessibilityRole="header">{title}</Text>
+              <DateTimePicker mode="date" display="inline" locale={lang === 'ru' ? 'ru-RU' : 'en-US'}
+                style={layout.calendar} themeVariant="light" accentColor={palette.accent}
+                value={dateForPicker(clamp(draft), true)}
+                minimumDate={new Date(min + 'T00:00:00Z')} maximumDate={new Date(max + 'T23:59:59.999Z')} timeZoneName="UTC"
+                onValueChange={(_, date) => setDraft(dateFromPicker(date, true))} />
+              <View style={layout.actions}>
+                <FinanceButton title={copy[lang].cancel} onPress={close} testID={testID + '-cancel'} />
+                {allowClear && <FinanceButton title={t.clearDate} testID={testID + '-clear'}
+                  onPress={() => { onClear?.(); close(); }} />}
+                <FinanceButton title={copy[lang].done} primary testID={testID + '-done'}
+                  onPress={() => { onChange(clamp(draft)); close(); }} />
+              </View>
+            </SafeAreaView>
           </ScrollView>
-        </SafeAreaView>
-      </View>
+        </View>
+      </SafeAreaProvider>
     </Modal>}
   </View>;
 }

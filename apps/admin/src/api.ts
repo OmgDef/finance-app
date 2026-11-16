@@ -25,7 +25,8 @@ export async function api<K extends Route>(name: K, options: {
     if (value !== undefined) query.set(key, value);
   }
   const timeout = AbortSignal.timeout(10_000);
-  const response = await fetch(path + (query.size ? '?' + query : ''), {
+  const url = import.meta.env.BASE_URL + path.slice(1);
+  const response = await fetch(url + (query.size ? '?' + query : ''), {
     method: route.method, credentials: 'same-origin', headers,
     body: options.body && JSON.stringify(options.body),
     signal: options.signal ? AbortSignal.any([timeout, options.signal]) : timeout,

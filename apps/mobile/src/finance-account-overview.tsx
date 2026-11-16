@@ -1,8 +1,11 @@
 import { useMemo } from 'react';
 import { ActivityIndicator, Pressable, SectionList, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Language, Result } from '@teta/contracts';
+import { AccountBalancePlot, AccountMonthlyFlow } from './finance-account-charts';
+import { cashFlowSeries } from './finance-cash-flow';
 import { financeCopy } from './finance-copy';
-import { formatFinancialDate, formatMoney } from './finance-format';
+import { formatAmount, formatFinancialDate, formatMoney } from './finance-format';
 import { statisticsCopy } from './finance-statistics-copy';
 import { FinanceAlert, palette, styles } from './finance-ui';
 
@@ -10,17 +13,20 @@ type Account = Result<'listAccounts'>['accounts'][number];
 type History = Result<'listAccountHistory'>;
 type Entry = History['entries'][number];
 type Category = Result<'listCategories'>['categories'][number];
-type Totals = Result<'getStatistics'>['totals'];
+type BalanceSeries = Result<'getAccountBalanceSeries'>;
 type MonthSection = { key: string; title: string; data: Entry[] };
 
-export function AccountOverview({ account, depositTerms, lang, categories, month, totals, totalsError, history,
-  historyBusy, historyError, accountError, refreshing, created, onRefresh, onMore, onTransaction }: {
+export function AccountOverview({ account, depositTerms, lang, categories, month, balanceSeries, balanceSeriesError,
+  monthlyActivity, totalsError, history, historyBusy, historyError, accountError, refreshing, created,
+  onRefresh, onMore, onTransaction }: {
   account?: Account;
   depositTerms: string;
   lang: Language;
   categories?: Category[];
   month: string;
-  totals?: Totals;
+  balanceSeries?: BalanceSeries;
+  balanceSeriesError: boolean;
+  monthlyActivity?: Result<'getStatistics'>;
   totalsError: boolean;
   history?: History;
   historyBusy: boolean;
@@ -35,6 +41,7 @@ export function AccountOverview({ account, depositTerms, lang, categories, month
   const t = financeCopy[lang];
   const s = statisticsCopy[lang];
   const { width, fontScale } = useWindowDimensions();
+  const { bottom } = useSafeAreaInsets();
   const monthFormat = useMemo(() => new Intl.DateTimeFormat(lang === 'ru' ? 'ru-RU' : 'en-US', {
     month: 'long', year: 'numeric', timeZone: 'UTC',
   }), [lang]);
@@ -53,17 +60,18 @@ export function AccountOverview({ account, depositTerms, lang, categories, month
   const titles = {
     opening: t.opening, adjustment: t.adjustment, expense: t.expenseEntry, income: t.incomeEntry, transfer: t.transfer,
   };
-  const amounts = totals?.find(({ currency }) => currency === account?.currency);
-  const metrics = account && totals && [
-    { label: s.income, amount: formatMoney(amounts?.incomeMinor ?? '0', account.currency, lang) },
-    { label: s.expenses, amount: formatMoney(amounts?.expenseMinor ?? '0', account.currency, lang) },
-  ];
+  const series = account && balanceSeries && balanceSeries.accountVersion >= account.accountVersion ? balanceSeries : undefined;
+  const balance = account ? formatAmount(series?.points.at(-1)?.balanceMinor ?? account.balanceMinor, lang) : '';
+  const amounts = monthlyActivity?.totals.find(({ currency }) => currency === account?.currency);
+  const metrics = account && monthlyActivity && cashFlowSeries.map(({ field, color, label }) => ({
+    label: s[label], color, amount: formatMoney(amounts?.[field] ?? '0', account.currency, lang),
+  }));
   const stackMetrics = Math.min(width, 540) / fontScale < 330 || !!metrics?.some(({ amount }) => amount.length > 18);
   const onlyOpening = history && !history.next && history.entries.every(({ type }) => type === 'opening');
 
   return <SectionList<Entry, MonthSection>
     sections={sections}
-    contentContainerStyle={layout.content}
+    contentContainerStyle={[layout.content, { paddingBottom: layout.content.paddingBottom + bottom }]}
     contentInsetAdjustmentBehavior="never"
     stickySectionHeadersEnabled={false}
     refreshing={refreshing} onRefresh={onRefresh}
@@ -72,7 +80,12 @@ export function AccountOverview({ account, depositTerms, lang, categories, month
     ListHeaderComponent={<View style={layout.header}>
       {account && <>
         <View style={layout.balance}>
-          <Text style={styles.heroValue} testID="finance-detail-balance">{formatMoney(account.balanceMinor, account.currency, lang)}</Text>
+          <Text accessibilityRole="header" style={layout.balanceLabel}>{t.accountBalance}</Text>
+          <View style={layout.balanceValue} accessible accessibilityLabel={`${balance} ${account.currency}`}
+            accessibilityLiveRegion="polite" testID="finance-detail-balance">
+            <Text style={layout.balanceAmount} numberOfLines={1} adjustsFontSizeToFit>{balance}</Text>
+            <Text style={layout.balanceCurrency}>{account.currency}</Text>
+          </View>
           <Text style={styles.meta}>
             {t['type' in account ? account.type : 'regular']} · {formatFinancialDate(account.startDate, lang)}
           </Text>
@@ -82,16 +95,28 @@ export function AccountOverview({ account, depositTerms, lang, categories, month
           {created && <Text style={styles.meta} testID="finance-receipt" accessibilityLiveRegion="polite">{t.accountCreated}</Text>}
         </View>
         <View style={[styles.surface, layout.summary]}>
+          <Text accessibilityRole="header" style={styles.groupTitle}>{t.balanceTrend}</Text>
+          {series && <AccountBalancePlot series={series} lang={lang} />}
+          {!series && !balanceSeriesError && !balanceSeries &&
+            <ActivityIndicator color={palette.accent} accessibilityLabel={t.loading} style={layout.loading} />}
+          {(balanceSeriesError || (balanceSeries && !series)) && <FinanceAlert>{t.balanceTrendError}</FinanceAlert>}
+        </View>
+        <View style={[styles.surface, layout.summary]}>
           <Text accessibilityRole="header" style={styles.groupTitle}>
             {t.monthlyActivity} · {monthFormat.format(new Date(month + '-01T00:00:00Z'))}
           </Text>
           {metrics && <View style={stackMetrics ? layout.metricsStack : layout.metrics}>
-            {metrics.map(({ label, amount }) => <View key={label} style={layout.metric}>
-              <Text style={styles.meta}>{label}</Text>
+            {metrics.map(({ label, amount, color }) => <View key={label} style={layout.metric}>
+              <View style={layout.legend}>
+                <View style={[layout.swatch, { backgroundColor: color }]} />
+                <Text style={styles.meta}>{label}</Text>
+              </View>
               <Text style={styles.value}>{amount}</Text>
             </View>)}
           </View>}
-          {!totals && !totalsError && <ActivityIndicator color={palette.accent} accessibilityLabel={t.loading} style={layout.loading} />}
+          {monthlyActivity && <AccountMonthlyFlow key={monthlyActivity.fromDate} report={monthlyActivity}
+            currency={account.currency} lang={lang} />}
+          {!monthlyActivity && !totalsError && <ActivityIndicator color={palette.accent} accessibilityLabel={t.loading} style={layout.loading} />}
           {totalsError && <FinanceAlert>{t.monthlyActivityError}</FinanceAlert>}
         </View>
       </>}
@@ -137,11 +162,17 @@ export function AccountOverview({ account, depositTerms, lang, categories, month
 const layout = StyleSheet.create({
   content: { ...styles.page, gap: 0 },
   header: { gap: 14 },
-  balance: { gap: 4 },
+  balance: { backgroundColor: palette.selected, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12, gap: 4 },
+  balanceLabel: { ...styles.groupTitle, color: palette.muted },
+  balanceValue: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'baseline', columnGap: 8 },
+  balanceAmount: { ...styles.heroValue, fontSize: 40, fontWeight: '700', letterSpacing: -0.8, maxWidth: '100%', flexShrink: 1 },
+  balanceCurrency: { color: palette.accent, fontSize: 15, fontWeight: '600' },
   summary: { padding: 12, gap: 9 },
   metrics: { flexDirection: 'row', gap: 12 },
   metricsStack: { gap: 9 },
   metric: { flexGrow: 1, flexBasis: 0, gap: 2 },
+  legend: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  swatch: { width: 7, height: 7, borderRadius: 2 },
   loading: { alignSelf: 'flex-start', minHeight: 42 },
   month: { ...styles.groupTitle, color: palette.muted, marginTop: 10, marginBottom: 6 },
   item: { backgroundColor: palette.panel, paddingHorizontal: 12 },

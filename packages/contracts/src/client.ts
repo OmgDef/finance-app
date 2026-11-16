@@ -12,6 +12,7 @@ export const endpoints = {
   listAccounts: { method: 'GET', url: '/api/v1/accounts' },
   getCurrencySummary: { method: 'GET', url: '/api/v1/accounts/summary' },
   getAccountBalance: { method: 'GET', url: '/api/v1/accounts/:accountId' },
+  getAccountBalanceSeries: { method: 'GET', url: '/api/v1/accounts/:accountId/balance-series' },
   renameAccount: { method: 'PUT', url: '/api/v1/accounts/:accountId/name' },
   updateAccountStartDate: { method: 'PUT', url: '/api/v1/accounts/:accountId/start-date' },
   listAccountHistory: { method: 'GET', url: '/api/v1/accounts/:accountId/history' },

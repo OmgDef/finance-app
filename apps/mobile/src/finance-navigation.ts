@@ -6,7 +6,7 @@ export type AccountEditor = { kind: 'rename' | 'startDate' } | { kind: 'card'; c
 type AccountPage = { name: 'history' | 'manage' | 'reconcile'; accountId: string } |
   { name: 'accountEditor'; accountId: string; editor: AccountEditor };
 export type FinancePage = { name: 'archive' | 'addAccount' | 'accountSettings' } | AccountPage | SchedulePage |
-  { name: 'record'; kind: TransactionFields['type']; accountId: string | null } |
+  { name: 'record'; kind: TransactionFields['type']; accountId: string | null; categoryId?: string } |
   { name: 'transaction'; transactionId: string } | { name: 'revise'; transactionId: string; version?: number };
 
 export type FinanceRoute = Exclude<FinancePage['name'], 'schedule' | 'accountEditor'> |
@@ -45,7 +45,10 @@ export function financePage(route: FinanceRoute, params: Record<string, string |
     }
     case 'record': {
       const kind = params.kind;
-      if (kind === 'expense' || kind === 'income' || kind === 'transfer') return { name: route, kind, accountId: accountId ?? null };
+      if (kind === 'expense' || kind === 'income' || kind === 'transfer') {
+        const categoryId = kind === 'expense' ? routeParameter(params.categoryId) : undefined;
+        return { name: route, kind, accountId: accountId ?? null, categoryId };
+      }
       return;
     }
     default: {
@@ -96,6 +99,7 @@ export function financePath(page: FinancePage): string {
 export function financeHref(page: FinancePage) {
   const query = new URLSearchParams();
   if ((page.name === 'schedule' || page.name === 'record') && page.accountId) query.set('accountId', page.accountId);
+  if (page.name === 'record' && page.kind === 'expense' && page.categoryId) query.set('categoryId', page.categoryId);
   if (page.name === 'revise' && page.version) query.set('version', String(page.version));
   if (page.name === 'schedule') {
     if (page.offset) query.set('offset', String(page.offset));

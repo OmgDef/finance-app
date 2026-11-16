@@ -1,0 +1,8 @@
+[Unit]
+Description=Encrypted TetaFinance database backup
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/tetafinance/bin/backup.sh

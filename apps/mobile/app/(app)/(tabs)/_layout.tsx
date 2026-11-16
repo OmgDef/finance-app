@@ -13,7 +13,7 @@ export default function TabLayout() {
     indicatorColor={palette.selected} labelVisibilityMode="labeled" backBehavior="initialRoute"
     minimizeBehavior="never" disableTransparentOnScrollEdge>
     {appTabs(lang).map(({ route, page, title, icon }) => (
-      <NativeTabs.Trigger key={route} name={route} accessibilityLabel={title} testID={'finance-tab-' + page}
+      <NativeTabs.Trigger key={route} name={route} accessibilityLabel={title} testID={'finance-tab-' + page} disableAutomaticContentInsets
         disabled={settingsBusy && route !== 'settings'}>
         <NativeTabs.Trigger.Icon src={financeIconSources[icon]} renderingMode="template" />
         <NativeTabs.Trigger.Label>{title}</NativeTabs.Trigger.Label>

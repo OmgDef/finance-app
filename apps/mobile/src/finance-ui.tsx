@@ -1,7 +1,9 @@
-import type { ReactNode } from 'react';
-import { Image, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import type { ComponentProps, ReactNode } from 'react';
+import { Image, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { TextInputProps } from 'react-native';
-import { KeyboardController } from 'react-native-keyboard-controller';
+import { KeyboardAwareScrollView, KeyboardController } from 'react-native-keyboard-controller';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView as NativeTabsSafeAreaView } from 'react-native-screens/experimental';
 import { FinanceIcon } from './finance-icon';
 import type { FinanceIconName } from './finance-icon';
 
@@ -10,6 +12,20 @@ export const palette = {
   line: '#E2E8F0', control: '#8594A7', danger: '#AD343E', accent: '#2459B2', selected: '#E9F1FF',
   positive: '#226349',
 };
+
+export function FinanceScrollView({ children, nativeTab, ...props }: ComponentProps<typeof KeyboardAwareScrollView> & {
+  nativeTab?: boolean;
+}) {
+  const { bottom } = useSafeAreaInsets();
+  // Android's native tab bar is measured by react-native-screens.
+  const useNativeTabInset = nativeTab && Platform.OS === 'android';
+  return <KeyboardAwareScrollView {...props} contentInsetAdjustmentBehavior="never"
+    contentContainerStyle={useNativeTabInset ? undefined : [styles.page, { paddingBottom: styles.page.paddingBottom + bottom }]}>
+    {useNativeTabInset ? <NativeTabsSafeAreaView edges={{ bottom: true }} insetType="all" style={styles.page}>
+      {children}
+    </NativeTabsSafeAreaView> : children}
+  </KeyboardAwareScrollView>;
+}
 
 export function FinanceMark() {
   return <Image source={require('../assets/theta.png')} style={styles.brandMark} accessible={false}

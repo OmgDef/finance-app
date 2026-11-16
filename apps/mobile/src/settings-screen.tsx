@@ -1,15 +1,37 @@
+import { requireOptionalNativeModule } from 'expo';
+import Constants from 'expo-constants';
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import type { Language, Result } from '@teta/contracts';
 import { copy } from './copy';
 import { financeCopy } from './finance-copy';
 import { FinanceIcon } from './finance-icon';
 import type { FinanceIconName } from './finance-icon';
-import { FinanceAlert, palette, styles } from './finance-ui';
+import { FinanceAlert, FinanceBrand, palette, styles } from './finance-ui';
 
 const languageNames = { ru: 'Русский', en: 'English' } as const;
+
+const application = requireOptionalNativeModule<{
+  nativeApplicationVersion: string | null;
+  nativeBuildVersion: string | null;
+}>('ExpoApplication');
+
+function AppInfo({ lang }: { lang: Language }) {
+  const t = copy[lang];
+  // Older iOS development builds can reload the UI before ExpoApplication is linked.
+  const version = application?.nativeApplicationVersion ?? Constants.expoConfig?.version;
+  const build = application?.nativeBuildVersion ?? Constants.platform?.ios?.buildNumber;
+
+  return <View style={layout.appInfo}>
+    <FinanceBrand title={t.appName} />
+    <View style={layout.appVersions}>
+      <Text style={styles.meta}>{t.appVersion} {version ?? '—'}</Text>
+      <Text style={styles.meta}>{t.appBuild} {build ?? '—'}</Text>
+    </View>
+  </View>;
+}
 
 export function AccountSettingsLink({ lang, onPress }: { lang: Language; onPress: () => void }) {
   return <View style={styles.surface}>
@@ -77,33 +99,37 @@ export function SettingsScreen({ lang, profile, busy, languageError, zoneEditing
       <FinanceIcon name="sign-out" color={palette.danger} />
       <Text style={[styles.title, layout.signOut]}>{t.signOut}</Text>
     </Pressable>
-    <Modal visible={languageOpen} transparent animationType="fade" onRequestClose={closeLanguage} statusBarTranslucent>
-      <View style={layout.modal}>
+    <AppInfo lang={lang} />
+    <Modal visible={languageOpen} transparent animationType="fade" onRequestClose={closeLanguage}
+      statusBarTranslucent navigationBarTranslucent>
+      <SafeAreaProvider style={layout.modal}>
         <Pressable accessible={false} importantForAccessibility="no" onPress={closeLanguage} style={layout.backdrop} />
-        <SafeAreaView edges={['bottom']} style={layout.sheet} accessibilityViewIsModal>
-          <ScrollView bounces={false} contentContainerStyle={layout.sheetContent}>
-            <View style={layout.sheetHeader}>
-              <Text accessibilityRole="header" style={styles.section}>{t.interfaceLanguage}</Text>
-              <Pressable accessibilityRole="button" accessibilityLabel={t.close} onPress={closeLanguage}
-                style={({ pressed }) => [layout.close, pressed && styles.dimmed]}>
-                <FinanceIcon name="close" color={palette.muted} />
-              </Pressable>
-            </View>
-            <View accessibilityRole="radiogroup" style={layout.options}>
-              {(['ru', 'en'] as const).map((option) => {
-                const checked = option === lang;
-                return <Pressable key={option} accessibilityRole="radio" accessibilityLanguage={option}
-                  accessibilityState={{ checked }} testID={'finance-language-' + option}
-                  style={({ pressed }) => [layout.option, checked && layout.selected, pressed && styles.dimmed]}
-                  onPress={() => { onLanguage(option); closeLanguage(); }}>
-                  <Text style={[styles.title, checked && layout.selectedText]}>{languageNames[option]}</Text>
-                  {checked && <FinanceIcon name="check" color={palette.accent} />}
-                </Pressable>;
-              })}
-            </View>
+        <View style={layout.sheet} accessibilityViewIsModal>
+          <ScrollView bounces={false} contentInsetAdjustmentBehavior="never">
+            <SafeAreaView edges={['bottom']} style={layout.sheetContent}>
+              <View style={layout.sheetHeader}>
+                <Text accessibilityRole="header" style={styles.section}>{t.interfaceLanguage}</Text>
+                <Pressable accessibilityRole="button" accessibilityLabel={t.close} onPress={closeLanguage}
+                  style={({ pressed }) => [layout.close, pressed && styles.dimmed]}>
+                  <FinanceIcon name="close" color={palette.muted} />
+                </Pressable>
+              </View>
+              <View accessibilityRole="radiogroup" style={layout.options}>
+                {(['ru', 'en'] as const).map((option) => {
+                  const checked = option === lang;
+                  return <Pressable key={option} accessibilityRole="radio" accessibilityLanguage={option}
+                    accessibilityState={{ checked }} testID={'finance-language-' + option}
+                    style={({ pressed }) => [layout.option, checked && layout.selected, pressed && styles.dimmed]}
+                    onPress={() => { onLanguage(option); closeLanguage(); }}>
+                    <Text style={[styles.title, checked && layout.selectedText]}>{languageNames[option]}</Text>
+                    {checked && <FinanceIcon name="check" color={palette.accent} />}
+                  </Pressable>;
+                })}
+              </View>
+            </SafeAreaView>
           </ScrollView>
-        </SafeAreaView>
-      </View>
+        </View>
+      </SafeAreaProvider>
     </Modal>
   </>;
 }
@@ -132,6 +158,8 @@ function SettingRow({ icon, title, value, valueID, hint, onPress, expanded, disa
 }
 
 const layout = StyleSheet.create({
+  appInfo: { alignItems: 'center', gap: 4 },
+  appVersions: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', columnGap: 12, rowGap: 4 },
   group: { gap: 8 },
   row: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 8, minHeight: 52, gap: 10 },
   rowLabels: { flex: 1, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'baseline', gap: 6 },

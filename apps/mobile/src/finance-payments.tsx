@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import type { Language, Result } from '@teta/contracts';
 import { request } from './api';
 import { copy } from './copy';
@@ -15,6 +15,20 @@ import { FinanceAlert, FinanceButton, palette, styles } from './finance-ui';
 
 type Snapshot = { today: string; timeZone: string } & ({ entries: ScheduleOccurrence[] } | { error: string });
 
+const expenseShortcuts = [
+  { categoryId: 'mobile-phone', title: 'phoneTopUp', icon: 'phone' },
+  { categoryId: 'housing', title: 'utilities', icon: 'utilities' },
+  { categoryId: 'transport', title: 'transport', icon: 'transport' },
+  { categoryId: 'groceries', title: 'groceries', icon: 'groceries' },
+  { categoryId: 'dining', title: 'dining', icon: 'dining' },
+  { categoryId: 'shopping', title: 'shopping', icon: 'shopping' },
+  { categoryId: 'health', title: 'health', icon: 'health' },
+  { categoryId: 'entertainment', title: 'entertainment', icon: 'entertainment' },
+  { categoryId: 'travel', title: 'travel', icon: 'travel' },
+] as const;
+
+const shortcutHeadingLineHeight = 24;
+
 export function PaymentsScreen({ access, lang, accountCount, categories, blocked, focused, refreshSignal, onRecord, onSchedule }: {
   access: FinanceAccess;
   lang: Language;
@@ -23,11 +37,21 @@ export function PaymentsScreen({ access, lang, accountCount, categories, blocked
   blocked: boolean;
   focused: boolean;
   refreshSignal: number;
-  onRecord: (kind: TransactionFields['type']) => void;
+  onRecord: (kind: TransactionFields['type'], categoryId?: string) => void;
   onSchedule: (ruleId?: string) => void;
 }) {
   const t = financeCopy[lang];
   const s = scheduleCopy[lang];
+  const { width, fontScale } = useWindowDimensions();
+  const [headingLineHeight, setHeadingLineHeight] = useState(0);
+  const contentWidth = Math.min(width, styles.page.maxWidth) - styles.page.paddingHorizontal * 2;
+  // iOS can lay out text at the new Dynamic Type size before updating the window font scale.
+  const scaledWidth = contentWidth / Math.max(fontScale, headingLineHeight / shortcutHeadingLineHeight);
+  const shortcutsPerRow = scaledWidth >= 312 ? 3 : scaledWidth >= 240 ? 2 : 1;
+  const shortcutRows = Array.from({ length: Math.ceil(expenseShortcuts.length / shortcutsPerRow) }, (_, index) => {
+    const start = index * shortcutsPerRow;
+    return expenseShortcuts.slice(start, start + shortcutsPerRow);
+  });
   const { today, timeZone } = access.profile;
   const [snapshot, setSnapshot] = useState<Snapshot>();
   const [retry, setRetry] = useState(0);
@@ -56,6 +80,26 @@ export function PaymentsScreen({ access, lang, accountCount, categories, blocked
   const entries = active && 'entries' in active ? active.entries : undefined;
 
   return <>
+    <View style={layout.section}>
+      <Text accessibilityRole="header" style={[styles.section, layout.shortcutsTitle]}
+        onTextLayout={({ nativeEvent }) => setHeadingLineHeight(nativeEvent.lines[0]?.height ?? 0)}>{t.quickExpenses}</Text>
+      {shortcutRows.map((row) => {
+        const showTiles = row.length > 1;
+        return <View key={row[0].categoryId} style={[layout.section, showTiles && layout.shortcutRow]}>
+          {row.map(({ categoryId, title, icon }) => {
+            const disabled = blocked || accountCount < 1 ||
+              !categories?.some(({ id, type }) => id === categoryId && type === 'expense');
+            return <Pressable key={categoryId} accessibilityRole="button" accessibilityState={{ disabled }} disabled={disabled}
+              testID={'finance-quick-expense-' + categoryId} onPress={() => onRecord('expense', categoryId)}
+              style={({ pressed }) => [layout.shortcut, showTiles && layout.shortcutTile,
+                pressed && layout.shortcutPressed, disabled && styles.dimmed]}>
+              <FinanceIcon name={icon} color={palette.accent} size={25} />
+              <Text style={[styles.title, layout.shortcutTitle]}>{t[title]}</Text>
+            </Pressable>;
+          })}
+        </View>;
+      })}
+    </View>
     <View style={layout.section}>
       <Text accessibilityRole="header" style={styles.groupTitle}>{s.newEntry}</Text>
       <View style={styles.surface}>
@@ -117,6 +161,13 @@ export function PaymentsScreen({ access, lang, accountCount, categories, blocked
 
 const layout = StyleSheet.create({
   section: { gap: 8 },
+  shortcutsTitle: { lineHeight: shortcutHeadingLineHeight },
+  shortcutRow: { flexDirection: 'row' },
+  shortcut: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: palette.selected,
+    borderRadius: 12, minHeight: 52, paddingHorizontal: 10, paddingVertical: 10 },
+  shortcutTile: { flex: 1, flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'space-between', minHeight: 84 },
+  shortcutPressed: { backgroundColor: palette.line },
+  shortcutTitle: { fontSize: 14 },
   action: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 12, paddingVertical: 8, minHeight: 49 },
   divider: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: palette.line },
   pressed: { backgroundColor: palette.ground },

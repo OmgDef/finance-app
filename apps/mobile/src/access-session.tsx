@@ -4,7 +4,7 @@ import {
   AppState, Platform, Pressable, StyleSheet, Text, TextInput, View,
 } from 'react-native';
 import { KeyboardAwareScrollView, KeyboardController, KeyboardToolbar } from 'react-native-keyboard-controller';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getCalendars, getLocales } from 'expo-localization';
 import * as Store from 'expo-secure-store';
 import * as Capture from 'expo-screen-capture';
@@ -47,6 +47,7 @@ export function useAccessSession() {
 }
 
 export function AccessProvider({ children }: { children: ReactNode }) {
+  const { bottom } = useSafeAreaInsets();
   const [lang, setLang] = useState<Language>(getLocales()[0]?.languageCode === 'ru' ? 'ru' : 'en');
   const [languageError, setLanguageError] = useState(false);
   const languageWrite = useRef<Promise<void> | undefined>(undefined);
@@ -603,11 +604,12 @@ export function AccessProvider({ children }: { children: ReactNode }) {
     canUseBiometrics={mode === 'unlock' && enabled && !invalidatedBiometrics.current}
     onPin={(pin) => run(() => unlock({ pin }))} onBiometrics={() => void run(() => unlock({ biometrics: true }))}
     onRecovery={() => showAccessForm(installation ? 'recovery' : 'activate')}
-    onReturnToPin={() => showAccessForm('unlock')} /> : <SafeAreaView style={styles.safe}>
+    onReturnToPin={() => showAccessForm('unlock')} /> : <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
     <KeyboardAwareScrollView bottomOffset={keyboardBottomOffset}
       extraKeyboardSpace={showsKeyboardToolbar ? 42 : 0} disableScrollOnKeyboardHide
+      contentInsetAdjustmentBehavior="never"
       keyboardDismissMode={showsActivationForm ? 'none' : 'on-drag'}
-      keyboardShouldPersistTaps="handled" contentContainerStyle={styles.page}>
+      keyboardShouldPersistTaps="handled" contentContainerStyle={[styles.page, { paddingBottom: styles.page.padding + bottom }]}>
       <View style={styles.header}>
         <FinanceBrand title={t.appName} />
         <Pressable accessibilityRole="button" accessibilityLabel={lang === 'en' ? 'Русский' : 'English'}

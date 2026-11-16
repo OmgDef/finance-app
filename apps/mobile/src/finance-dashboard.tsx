@@ -3,8 +3,9 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, View, useWindowDimensio
 import type { ReactNode } from 'react';
 import type { Language, Result } from '@teta/contracts';
 import { copy } from './copy';
+import { cashFlowSeries, cashFlowWeeks, WeeklyCashFlowPlot } from './finance-cash-flow';
 import { financeCopy } from './finance-copy';
-import { addFinancialDays, currencies, formatAmount, formatFinancialDate, formatMoney, formatRate } from './finance-format';
+import { currencies, formatAmount, formatFinancialDate, formatMoney, formatRate } from './finance-format';
 import type { Currency } from './finance-format';
 import { FinanceIcon } from './finance-icon';
 import { scheduleCopy } from './finance-schedule-copy';
@@ -21,7 +22,7 @@ type Read<T> = { data?: T; busy: boolean; error?: string; load(): Promise<void> 
 const labels = {
   ru: {
     switchBalance: 'Показать остаток', annual: 'годовых', matures: 'до', moreCards: 'Другие карточки',
-    flow: 'Движение денег', period: 'Последние 30 дней', statistics: 'Вся статистика',
+    flow: 'Движение денег', statistics: 'Вся статистика',
     noFlow: 'За этот период в выбранной валюте нет операций.', flowError: 'Не удалось обновить движение денег.',
     rates: 'Курсы валют', source: 'Официальные курсы Банка России', ratesError: 'Не удалось обновить курсы валют.',
     cachedRates: 'Показаны сохранённые курсы.', effective: 'Действует с', change: 'К предыдущему курсу',
@@ -30,7 +31,7 @@ const labels = {
   },
   en: {
     switchBalance: 'Show balance', annual: 'per year', matures: 'until', moreCards: 'More cards',
-    flow: 'Cash flow', period: 'Last 30 days', statistics: 'View statistics',
+    flow: 'Cash flow', statistics: 'View statistics',
     noFlow: 'No transactions in this currency for the period.', flowError: 'Could not update cash flow.',
     rates: 'Exchange rates', source: 'Official Bank of Russia rates', ratesError: 'Could not update exchange rates.',
     cachedRates: 'Showing saved rates.', effective: 'Effective from', change: 'Since the previous rate',
@@ -161,46 +162,36 @@ function ReadStatus<T>({ read, lang, message, stale = false }: { read: Read<T>; 
   return null;
 }
 
-const series = [
-  { field: 'incomeMinor', label: 'income', color: palette.accent },
-  { field: 'expenseMinor', label: 'expenses', color: '#91A6BC' },
-] as const;
-const shortDate = (date: string, lang: Language) => formatFinancialDate(date, lang).slice(0, 5);
-const plotHeight = 104;
-
 export function CashFlowCard({ read, accounts, lang, onStatistics }: {
   read: Read<Result<'getStatistics'>>; accounts?: Account[]; lang: Language; onStatistics(preset: StatisticsPreset): void;
 }) {
   const [selected, setSelected] = useState<Currency>();
+  const [selectedWeek, setSelectedWeek] = useState<string>();
   const currency = selected ?? (accounts?.some((account) => account.currency === 'RUB') ? 'RUB' : accounts?.[0]?.currency) ?? 'RUB';
   const report = read.data;
   const t = labels[lang];
   const s = statisticsCopy[lang];
   const total = report?.totals.find((total) => total.currency === currency);
-  const entries = report?.weeks?.filter((week) => week.currency === currency) ?? [];
-  const weeks = report ? Array.from({ length: 5 }, (_, weekIndex) => {
-    const fromDate = addFinancialDays(report.fromDate, weekIndex * 7);
-    const throughDate = addFinancialDays(fromDate, 6);
-    return {
-      fromDate, throughDate: throughDate > report.throughDate ? report.throughDate : throughDate,
-      ...entries.find((week) => week.weekIndex === weekIndex),
-    };
-  }) : [];
-  const max = Math.max(0, ...weeks.flatMap((week) => series.map(({ field }) => Number(week[field] ?? 0))));
+  const weeks = cashFlowWeeks(report, currency);
+  const weekIndex = weeks.findIndex(({ fromDate }) => fromDate === selectedWeek);
+  const week = weeks[weekIndex];
 
   const statisticsLink = report && <CardLink title={t.statistics} testID="finance-dashboard-statistics"
     onPress={() => onStatistics({ fromDate: report.fromDate, throughDate: report.throughDate, currency })} />;
-  return <Card title={t.flow} detail={t.period} testID="finance-dashboard-cash-flow" action={statisticsLink}>
+  return <Card title={t.flow} detail={s.recent} testID="finance-dashboard-cash-flow" action={statisticsLink}>
     <View accessibilityRole="radiogroup" accessibilityLabel={s.currency} style={layout.currencyControl}>
       {currencies.map((code) => <Pressable key={code} accessibilityRole="radio" accessibilityState={{ checked: code === currency }}
-        onPress={() => setSelected(code)} testID={'finance-dashboard-flow-' + code}
+        onPress={() => {
+          if (code !== currency) setSelectedWeek(undefined);
+          setSelected(code);
+        }} testID={'finance-dashboard-flow-' + code}
         style={({ pressed }) => [layout.currencyOption, code === currency && layout.selectedCurrency, pressed && styles.dimmed]}>
         <Text style={[layout.currencyText, code === currency && layout.selectedCurrencyText]}>{code}</Text>
       </Pressable>)}
     </View>
     {report?.weeks && <>
       <View style={layout.metrics}>
-        {series.map(({ field, label, color }) => <View key={field} style={layout.metric}>
+        {cashFlowSeries.map(({ field, label, color }) => <View key={field} style={layout.metric}>
           <View style={layout.legend}>
             <View style={[layout.swatch, { backgroundColor: color }]} />
             <Text style={styles.meta}>{s[label]}</Text>
@@ -208,27 +199,15 @@ export function CashFlowCard({ read, accounts, lang, onStatistics }: {
           <Text style={layout.metricValue}>{formatMoney(total?.[field] ?? '0', currency, lang)}</Text>
         </View>)}
       </View>
-      <View style={layout.plot}>
-        <View style={layout.guides} pointerEvents="none">
-          {[0, 1, 2].map((line) => <View key={line} style={layout.guide} />)}
-        </View>
-        {weeks.map((week, index) => <View key={week.fromDate} style={layout.week} accessible
-          accessibilityLabel={[
-            formatFinancialDate(week.fromDate, lang) + ' – ' + formatFinancialDate(week.throughDate, lang),
-            ...series.map(({ field, label }) => s[label] + ' ' + formatMoney(week[field] ?? '0', currency, lang)),
-          ].join(', ')}>
-          <View style={layout.bars}>
-            {series.map(({ field, color }) => {
-              const proportional = max ? Number(week[field] ?? 0) / max * (plotHeight - 8) : 0;
-              return <View key={field} style={[layout.bar, {
-                backgroundColor: color, height: proportional ? Math.max(2, proportional) : 0,
-              }]} />;
-            })}
-          </View>
-          <Text style={layout.axis}>{index % 2 === 0 ? shortDate(week.fromDate, lang) : ''}</Text>
+      <WeeklyCashFlowPlot weeks={weeks} currency={currency} lang={lang} overview
+        selection={{ index: weekIndex, onSelect: (index) => setSelectedWeek(index === weekIndex ? undefined : weeks[index].fromDate) }} />
+      {week ? <View style={layout.weekDetails} testID="finance-dashboard-week-details" accessibilityLiveRegion="polite">
+        <Text style={styles.groupTitle}>{formatFinancialDate(week.fromDate, lang)} – {formatFinancialDate(week.throughDate, lang)}</Text>
+        {cashFlowSeries.map(({ field, label }) => <View key={field} style={layout.weekMetric}>
+          <Text style={styles.meta}>{s[label]}</Text>
+          <Text style={styles.title}>{formatMoney(week[field], currency, lang)}</Text>
         </View>)}
-      </View>
-      {max === 0 && <Text style={styles.meta}>{t.noFlow}</Text>}
+      </View> : !total && <Text style={styles.meta}>{t.noFlow}</Text>}
     </>}
     <ReadStatus read={read} lang={lang} message={t.flowError} />
   </Card>;
@@ -364,12 +343,8 @@ const layout = StyleSheet.create({
   legend: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   swatch: { width: 8, height: 8, borderRadius: 2 },
   metricValue: { color: palette.ink, fontSize: 17, fontWeight: '700', fontVariant: ['tabular-nums'] },
-  plot: { flexDirection: 'row', marginTop: 6 },
-  guides: { position: 'absolute', top: 6, left: 0, right: 0, height: plotHeight - 6, justifyContent: 'space-between' },
-  guide: { height: StyleSheet.hairlineWidth, backgroundColor: palette.line },
-  week: { flex: 1, gap: 4 },
-  bars: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'center', gap: 4, height: plotHeight },
-  bar: { width: '23%', maxWidth: 23, borderTopLeftRadius: 3, borderTopRightRadius: 3 },
+  weekDetails: { borderTopColor: palette.line, borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 8, gap: 3 },
+  weekMetric: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'baseline', columnGap: 8 },
   axis: { color: palette.muted, fontSize: 12, textAlign: 'center', fontVariant: ['tabular-nums'] },
   rateRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: 10, paddingVertical: 7 },
   rateDetails: { flexGrow: 1, gap: 3 },

@@ -1,0 +1,73 @@
+name: tetafinance
+
+x-runtime: &runtime
+  image: tetafinance-api:${TETA_RELEASE:?Set the release ID}
+  init: true
+  environment: &database-env
+    DATABASE_URL: mysql://teta:${MYSQL_PASSWORD:?Set MYSQL_PASSWORD}@db:3306/teta
+    RECOVERY_VERSION: ${RECOVERY_VERSION:-1}
+  logging: &logging
+    options:
+      max-size: 10m
+      max-file: '3'
+  depends_on:
+    db:
+      condition: service_healthy
+
+services:
+  db:
+    image: mysql:8.4.13
+    restart: unless-stopped
+    mem_limit: 768m
+    command: ["--innodb-buffer-pool-size=256M", "--max-connections=40"]
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: teta
+      MYSQL_USER: teta
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=\"$$MYSQL_PASSWORD\" mysql -h 127.0.0.1 -u \"$$MYSQL_USER\" \"$$MYSQL_DATABASE\" -e 'SELECT 1'"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+    volumes:
+      - mysql:/var/lib/mysql
+    logging: *logging
+
+  migrate:
+    <<: *runtime
+    command: ["node", "apps/api/src/migrate.ts"]
+    mem_limit: 256m
+    profiles: [tools]
+
+  api:
+    <<: *runtime
+    restart: unless-stopped
+    mem_limit: 256m
+    environment:
+      <<: *database-env
+      API_ORIGIN: https://teta.zslon.ru
+      ADMIN_ORIGIN: https://teta.zslon.ru
+      ADMIN_UNDER_PATH: '1'
+      PROXY_IP: 172.29.63.1
+      ACCESS_KEY: ${ACCESS_KEY:?Set ACCESS_KEY}
+      TOTP_KEY: ${TOTP_KEY:?Set TOTP_KEY}
+    ports:
+      - 127.0.0.1:18443:3000
+
+  worker:
+    <<: *runtime
+    restart: unless-stopped
+    stop_grace_period: 30s
+    mem_limit: 192m
+    command: ["node", "apps/api/src/worker.ts"]
+
+volumes:
+  mysql:
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.29.63.0/24
+          gateway: 172.29.63.1

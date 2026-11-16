@@ -43,6 +43,16 @@ export function addFinancialDays(date: string, days: number) {
   return value.toISOString().slice(0, 10);
 }
 
+export function formatChartAmount(minor: bigint | number, lang: Language) {
+  return new Intl.NumberFormat(lang === 'ru' ? 'ru-RU' : 'en-US', {
+    notation: 'compact', maximumFractionDigits: 2,
+  }).format(Number(minor) / 100);
+}
+
+export function recentStatisticsPeriod(throughDate: string) {
+  return { fromDate: addFinancialDays(throughDate, -89), throughDate };
+}
+
 export function formatProfileMoment(milliseconds: number, timeZone: string, lang: Language) {
   try {
     return new Intl.DateTimeFormat(lang === 'ru' ? 'ru-RU' : 'en-GB', {

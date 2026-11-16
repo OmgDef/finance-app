@@ -110,7 +110,7 @@ function App() {
     }).catch(() => {}).finally(() => setCheckingSession(false));
   }, []);
   useEffect(() => {
-    if (session && path === '/') navigate(adminPaths.users, true);
+    if (session && path === adminPaths.home) navigate(adminPaths.users, true);
   }, [path, session]);
   useEffect(() => {
     setIssued(undefined);
@@ -121,7 +121,7 @@ function App() {
       loadedUsers.current = undefined;
       return;
     }
-    if (path === '/' || busy || loadedUsers.current === session) return;
+    if (path === adminPaths.home || busy || loadedUsers.current === session) return;
     loadedUsers.current = session;
     void run(() => load());
   }, [session, onUsersPage, path, busy]);

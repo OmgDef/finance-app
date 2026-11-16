@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { AppState, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Language } from '@teta/contracts';
 import { brandBlue } from './brand-colors';
 import { copy } from './copy';
@@ -28,6 +28,7 @@ export function UnlockScreen({ lang, busy, message, languageError, canUseBiometr
 }) {
   const t = copy[lang];
   const { width, height } = useWindowDimensions();
+  const { bottom } = useSafeAreaInsets();
   const keySize = Math.max(48, Math.floor(Math.min((width - 80) / 3, height * 0.11, 104)));
   const pin = useRef('');
   const submitting = useRef(false);
@@ -73,8 +74,9 @@ export function UnlockScreen({ lang, busy, message, languageError, canUseBiometr
     </Pressable>;
   }
 
-  return <SafeAreaView style={styles.safe} testID="unlock-screen">
-    <ScrollView contentContainerStyle={styles.page}>
+  return <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']} testID="unlock-screen">
+    <ScrollView contentInsetAdjustmentBehavior="never"
+      contentContainerStyle={[styles.page, { paddingBottom: styles.page.paddingBottom + bottom }]}>
       <View style={styles.header}>
         <Pressable accessibilityRole="button" accessibilityLabel={lang === 'en' ? 'Русский' : 'English'}
           style={styles.linkTarget} onPress={onLanguage}>

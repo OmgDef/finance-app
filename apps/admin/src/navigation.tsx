@@ -1,17 +1,20 @@
 import { useSyncExternalStore } from 'react';
 import type { ComponentProps } from 'react';
 
+const base = import.meta.env.BASE_URL.slice(0, -1);
+
 export const adminPaths = {
-  users: '/users',
-  audit: '/audit',
-  support: '/support',
-  finance: (userId: string) => `/users/${userId}/finance`,
-  recoveryReview: (userId: string) => `/users/${userId}/recovery-review`,
-  account: (userId: string, accountId: string) => `/users/${userId}/finance/accounts/${accountId}`,
+  home: import.meta.env.BASE_URL,
+  users: base + '/users',
+  audit: base + '/audit',
+  support: base + '/support',
+  finance: (userId: string) => `${base}/users/${userId}/finance`,
+  recoveryReview: (userId: string) => `${base}/users/${userId}/recovery-review`,
+  account: (userId: string, accountId: string) => `${base}/users/${userId}/finance/accounts/${accountId}`,
   schedule: (userId: string, accountId: string, ruleId?: string) =>
-    `/users/${userId}/finance/accounts/${accountId}/schedule${ruleId ? '/' + ruleId : ''}`,
+    `${base}/users/${userId}/finance/accounts/${accountId}/schedule${ruleId ? '/' + ruleId : ''}`,
   transaction: (userId: string, accountId: string, transactionId: string) =>
-    `/users/${userId}/finance/accounts/${accountId}/transactions/${transactionId}`,
+    `${base}/users/${userId}/finance/accounts/${accountId}/transactions/${transactionId}`,
 };
 
 export type FinanceRoute = {
@@ -27,11 +30,12 @@ const pathname = () => window.location.pathname;
 
 export function adminRoute(path: string): AdminRoute {
   const clean = path.replace(/\/$/, '');
-  if (!clean || clean === adminPaths.users) return { page: 'users' };
+  if (clean === base || clean === adminPaths.users) return { page: 'users' };
   if (clean === adminPaths.audit) return { page: 'audit' };
   if (clean === adminPaths.support) return { page: 'support' };
 
-  const [, section, userId, page, accounts, accountId, detail, detailId, extra] = clean.split('/');
+  if (!clean.startsWith(adminPaths.home)) return { page: 'notFound' };
+  const [section, userId, page, accounts, accountId, detail, detailId, extra] = clean.slice(adminPaths.home.length).split('/');
   if (section === 'users' && id.test(userId ?? '') && extra === undefined) {
     if (page === 'recovery-review' && accounts === undefined) return { page: 'recoveryReview', userId };
     if (page === 'finance') {

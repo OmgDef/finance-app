@@ -1,26 +1,30 @@
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
-import { KeyboardController } from 'react-native-keyboard-controller';
 import type { Language, Result, StatisticsQuery } from '@teta/contracts';
 import { request } from './api';
 import { copy } from './copy';
 import { apiErrorCode } from './finance-commands';
 import type { FinanceAccess } from './finance-commands';
 import { financeCopy } from './finance-copy';
-import { FinanceDateField } from './finance-date-field';
-import { currencies, formatAmount, formatFinancialDate, formatMoney } from './finance-format';
-import type { Currency } from './finance-format';
+import { formatAmount, formatFinancialDate, formatMoney, recentStatisticsPeriod } from './finance-format';
 import { FinanceIcon } from './finance-icon';
 import { statisticsCopy } from './finance-statistics-copy';
-import { Choice, FinanceAlert, FinanceButton, palette, styles } from './finance-ui';
+import { FinanceAlert, FinanceButton, palette, styles } from './finance-ui';
 
 type Report = Result<'getStatistics'>;
 type Entry = Report['entries'][number];
 type ExpenseCategory = Report['categories'][number];
 type Account = Result<'listAccounts'>['accounts'][number];
 type Category = Result<'listCategories'>['categories'][number];
-type Filters = Omit<StatisticsQuery, 'before'>;
-export type StatisticsPreset = Pick<Report, 'fromDate' | 'throughDate'> & { currency: NonNullable<Filters['currency']> };
+export type StatisticsFilters = Omit<StatisticsQuery, 'before' | 'byWeek'>;
+export type StatisticsPeriod = 'recent' | 'month' | 'custom';
+export type StatisticsFilterEditor = {
+  current: StatisticsFilters;
+  currentPeriod: StatisticsPeriod;
+  reportPeriod?: Pick<Report, 'fromDate' | 'throughDate'>;
+  onApply(filters: StatisticsFilters, period: StatisticsPeriod): void;
+};
+export type StatisticsPreset = Pick<Report, 'fromDate' | 'throughDate'> & { currency: NonNullable<StatisticsFilters['currency']> };
 type Drill = Pick<ExpenseCategory, 'currency' | 'categoryId'> & Pick<Report, 'fromDate' | 'throughDate'>;
 type Snapshot = { scope: string; report?: Report; busy: boolean; error?: string };
 
@@ -34,15 +38,26 @@ function queryFor({ fromDate, throughDate, accountId, categoryId, type, currency
 }
 
 export function useStatistics(access: FinanceAccess, enabled: boolean, dataRevision: number, preset?: StatisticsPreset) {
-  const [filters, setFilters] = useState<Filters>(preset ?? {});
+  const { today } = access.profile;
+  const [selection, setSelection] = useState<{ filters: StatisticsFilters; periodMode: StatisticsPeriod }>(() => {
+    if (!preset) return { filters: {}, periodMode: 'recent' };
+    const { fromDate, throughDate, currency } = preset;
+    if (throughDate === today && fromDate === recentStatisticsPeriod(today).fromDate) {
+      return { filters: { currency }, periodMode: 'recent' };
+    }
+    return { filters: preset, periodMode: 'custom' };
+  });
   const [drill, setDrill] = useState<Drill>();
   const [revision, setRevision] = useState(0);
   const [snapshot, setSnapshot] = useState<Snapshot>();
   const latest = useRef(0);
   const pendingPage = useRef<string | undefined>(undefined);
   const activeScope = useRef('');
-  const effective: Filters = drill ? { ...filters, ...drill, type: 'expense' } : filters;
-  const month = effective.fromDate === undefined ? access.profile.today.slice(0, 7) : '';
+  const { filters } = selection;
+  const periodMode = drill ? 'custom' : selection.periodMode;
+  const effective: StatisticsFilters = drill ? { ...filters, ...drill, type: 'expense' }
+    : periodMode === 'recent' ? { ...filters, ...recentStatisticsPeriod(today) } : filters;
+  const month = periodMode === 'month' ? today.slice(0, 7) : '';
   const scope = JSON.stringify([revision, dataRevision, month, queryFor(effective).toString()]);
   activeScope.current = enabled ? scope : '';
   const visible = snapshot?.scope === scope ? snapshot : undefined;
@@ -89,10 +104,10 @@ export function useStatistics(access: FinanceAccess, enabled: boolean, dataRevis
   function refresh() { setRevision((value) => value + 1); }
 
   return {
-    filters: effective, drill, report: visible?.report, error: visible?.error,
+    filters: effective, periodMode, drill, report: visible?.report, error: visible?.error,
     loading: enabled && (visible?.busy ?? true), refresh,
     more: () => { if (visible?.report && !visible.busy) void load(visible.report); },
-    apply: (next: Filters) => { setFilters(next); setDrill(undefined); refresh(); },
+    apply: (next: StatisticsFilters, mode: StatisticsPeriod) => { setSelection({ filters: next, periodMode: mode }); setDrill(undefined); refresh(); },
     openCategory: (entry: ExpenseCategory) => {
       if (visible?.report) {
         const { fromDate, throughDate } = visible.report;
@@ -103,76 +118,6 @@ export function useStatistics(access: FinanceAccess, enabled: boolean, dataRevis
   };
 }
 
-function FilterForm({ current, report, today, accounts, categories, lang, onApply }: {
-  current: Filters; report?: Report; today: string; accounts?: Account[]; categories?: Category[]; lang: Language;
-  onApply(filters: Filters): void;
-}) {
-  const t = statisticsCopy[lang];
-  const f = financeCopy[lang];
-  const { fontScale } = useWindowDimensions();
-  const wideFields = fontScale < 1.5;
-  const [period, setPeriod] = useState<'month' | 'custom'>(current.fromDate ? 'custom' : 'month');
-  const [account, setAccount] = useState(current.accountId ?? 'all');
-  const [category, setCategory] = useState(current.categoryId ?? 'all');
-  const [type, setType] = useState<NonNullable<Filters['type']> | 'all'>(current.type ?? 'all');
-  const [currency, setCurrency] = useState<Currency | 'all'>(current.currency ?? 'all');
-  const [invalid, setInvalid] = useState(false);
-  const [from, setFrom] = useState<string>();
-  const [through, setThrough] = useState<string>();
-  const fromDate = from ?? current.fromDate ?? report?.fromDate ?? today;
-  const throughDate = through ?? current.throughDate ?? report?.throughDate ?? today;
-
-  function apply() {
-    if (period === 'custom' && fromDate > throughDate) {
-      setInvalid(true);
-      return;
-    }
-    void KeyboardController.dismiss();
-    onApply({
-      ...(period === 'custom' && { fromDate, throughDate }),
-      accountId: account === 'all' ? undefined : account,
-      categoryId: category === 'all' ? undefined : category,
-      type: type === 'all' ? undefined : type,
-      currency: currency === 'all' ? undefined : currency,
-    });
-  }
-
-  return <View style={[styles.surface, layout.filterForm]}>
-    <Choice title={t.period} value={period} onChange={setPeriod} testID="statistics-period"
-      options={[{ id: 'month', label: t.month }, { id: 'custom', label: t.custom }]} />
-    {period === 'custom' && <View style={wideFields ? layout.dateInputs : layout.stackedFields}>
-      <View style={wideFields && layout.dateInput}>
-        <FinanceDateField title={t.from} lang={lang} today={today} value={fromDate} onChange={setFrom}
-          max={throughDate} testID="statistics-from-date" />
-      </View>
-      <View style={wideFields && layout.dateInput}>
-        <FinanceDateField title={t.through} lang={lang} today={today} value={throughDate} onChange={setThrough}
-          min={fromDate} testID="statistics-through-date" />
-      </View>
-    </View>}
-    <Choice title={t.type} value={type} onChange={(value) => {
-      setType(value);
-      if (value !== 'all' && categories?.some((item) => item.id === category && item.type !== value)) setCategory('all');
-    }} testID="statistics-filter"
-      options={[{ id: 'all', label: t.allTypes }, { id: 'income', label: f.incomeEntry }, { id: 'expense', label: f.expenseEntry }]} />
-    <Choice title={f.account} value={account} onChange={setAccount} testID="statistics-account"
-      options={[{ id: 'all', label: t.allAccounts }, ...(accounts ?? []).map(({ accountId, name, currency, archived }) => ({
-        id: accountId, label: [name, currency, ...(archived ? [f.archivedAccount] : [])].join(' · '),
-      }))]} />
-    <Choice title={f.category} value={category} onChange={setCategory} testID="statistics-category"
-      options={[{ id: 'all', label: t.allCategories }, ...(categories ?? [])
-        .filter((item) => type === 'all' || item.type === type)
-        .map(({ id, nameEn, nameRu }) => ({ id, label: lang === 'en' ? nameEn : nameRu }))]} />
-    <Choice title={t.currency} value={currency} onChange={setCurrency} testID="statistics-currency"
-      options={[{ id: 'all', label: t.allCurrencies }, ...currencies.map((id) => ({ id, label: id }))]} />
-    {invalid && period === 'custom' && <FinanceAlert>{t.invalidPeriod}</FinanceAlert>}
-    <View style={layout.actions}>
-      <FinanceButton title={t.apply} onPress={apply} primary testID="statistics-apply" />
-      <FinanceButton title={t.reset} onPress={() => { void KeyboardController.dismiss(); onApply({}); }} testID="statistics-reset" />
-    </View>
-  </View>;
-}
-
 function categoryWidth(amount: string, total: string): `${number}%` {
   const denominator = BigInt(total);
   if (denominator === 0n) return '0%';
@@ -180,16 +125,15 @@ function categoryWidth(amount: string, total: string): `${number}%` {
   return `${Number(basisPoints) / 100}%`;
 }
 
-export function StatisticsScreen({ statistics, accounts, categories, lang, today, onTransaction, scrollToTop }: {
-  statistics: ReturnType<typeof useStatistics>; accounts?: Account[]; categories?: Category[]; lang: Language; today: string;
-  onTransaction(entry: Entry): void; scrollToTop(): void;
+export function StatisticsScreen({ statistics, accounts, categories, lang, onEditFilters, onTransaction, scrollToTop }: {
+  statistics: ReturnType<typeof useStatistics>; accounts?: Account[]; categories?: Category[]; lang: Language;
+  onEditFilters(editor: StatisticsFilterEditor): void; onTransaction(entry: Entry): void; scrollToTop(): void;
 }) {
   const t = statisticsCopy[lang];
   const f = financeCopy[lang];
-  const [editing, setEditing] = useState(false);
   const { width, fontScale } = useWindowDimensions();
   const stackMetrics = Math.min(width, 540) / fontScale < 300;
-  const { filters, drill, report, loading, error } = statistics;
+  const { filters, periodMode, drill, report, loading, error } = statistics;
   const period = report ?? (filters.fromDate && filters.throughDate ? { fromDate: filters.fromDate, throughDate: filters.throughDate } : undefined);
   const categoryNames = new Map(categories?.map(({ id, nameEn, nameRu }) => [id, lang === 'en' ? nameEn : nameRu]));
   const accountNames = new Map(accounts?.map(({ accountId, name }) => [accountId, name]));
@@ -205,10 +149,11 @@ export function StatisticsScreen({ statistics, accounts, categories, lang, today
     else entriesByDay.set(entry.date, [entry]);
   }
 
-  function apply(next: Filters) {
-    statistics.apply(next);
-    setEditing(false);
-    scrollToTop();
+  function openFilters() {
+    onEditFilters({ current: filters, currentPeriod: periodMode, reportPeriod: period, onApply: (next, mode) => {
+      statistics.apply(next, mode);
+      scrollToTop();
+    } });
   }
 
   return <View style={layout.report}>
@@ -216,23 +161,21 @@ export function StatisticsScreen({ statistics, accounts, categories, lang, today
       <View style={layout.period}>
         <FinanceIcon name="calendar" color={palette.accent} size={18} />
         <View style={layout.labels}>
-          <Text style={styles.groupTitle}>{filters.fromDate ? t.period : t.month}</Text>
+          <Text style={styles.groupTitle}>{periodMode === 'custom' ? t.period : t[periodMode]}</Text>
           {period && <Text style={styles.meta} testID="statistics-period">
             {formatFinancialDate(period.fromDate, lang)} – {formatFinancialDate(period.throughDate, lang)}
           </Text>}
         </View>
       </View>
-      <Pressable accessibilityRole="button" accessibilityState={{ expanded: editing }} testID="statistics-filters"
-        onPress={() => setEditing(!editing)} style={({ pressed }) => [styles.button, layout.filters, (editing || pressed) && styles.checked]}>
+      <Pressable accessibilityRole="button" testID="statistics-filters" onPress={openFilters}
+        style={({ pressed }) => [styles.button, layout.filters, pressed && styles.checked]}>
         <FinanceIcon name="filters" color={palette.accent} size={16} />
         <Text style={styles.buttonText}>{t.filters}</Text>
       </Pressable>
       {filterLabels.length > 0 && <Text style={[styles.meta, layout.filterSummary]}>{filterLabels.join(' · ')}</Text>}
     </View>
-    {editing && <FilterForm current={filters} report={report} today={today} accounts={accounts} categories={categories}
-      lang={lang} onApply={apply} />}
     {drill && <View style={layout.actions}>
-      <FinanceButton title={t.report} onPress={() => { setEditing(false); statistics.closeCategory(); scrollToTop(); }}
+      <FinanceButton title={t.report} onPress={() => { statistics.closeCategory(); scrollToTop(); }}
         testID="statistics-clear-drill" />
     </View>}
     {errorMessage && <View style={[styles.surface, layout.message]}>
@@ -277,7 +220,7 @@ export function StatisticsScreen({ statistics, accounts, categories, lang, today
                 {report.categories.filter((category) => category.currency === currency).map((entry) => (
                   <Pressable key={entry.categoryId} accessibilityRole="button"
                     testID={`statistics-expense-${currency}-${entry.categoryId}`}
-                    onPress={() => { setEditing(false); statistics.openCategory(entry); scrollToTop(); }}
+                    onPress={() => { statistics.openCategory(entry); scrollToTop(); }}
                     style={({ pressed }) => [layout.categoryRow, pressed && layout.pressed]}>
                     <View style={layout.line}>
                       <Text style={styles.title}>{categoryNames.get(entry.categoryId) ?? entry.categoryId}</Text>
@@ -336,10 +279,6 @@ const layout = StyleSheet.create({
   labels: { flex: 1, gap: 3 },
   filterSummary: { width: '100%', paddingHorizontal: 4 },
   filters: { paddingHorizontal: 8 },
-  filterForm: { padding: 12, gap: 14 },
-  dateInputs: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  stackedFields: { gap: 8 },
-  dateInput: { flex: 1, minWidth: 128 },
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'flex-start' },
   section: { gap: 8 },
   message: { padding: 12, gap: 8 },

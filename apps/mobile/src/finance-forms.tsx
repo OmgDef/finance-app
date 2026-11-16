@@ -85,9 +85,10 @@ export function AccountForm({ lang, today, disabled, onSubmit }: Props & { today
 
 type TransactionKind = TransactionFields['type'];
 
-export function TransactionForm({ lang, today, disabled, onSubmit, accounts, categories, selectedAccountId, kind, initial }: {
+export function TransactionForm({ lang, today, disabled, onSubmit, accounts, categories, selectedAccountId, kind, initial, defaultCategoryId }: {
   lang: Language; today: string; disabled: boolean; onSubmit: (fields: TransactionFields) => void; accounts: Account[];
   categories: Category[]; selectedAccountId: string | null; kind: TransactionKind; initial?: TransactionFields;
+  defaultCategoryId?: string;
 }) {
   const t = financeCopy[lang];
   const [accountId, setAccountId] = useState(() => initial
@@ -95,7 +96,10 @@ export function TransactionForm({ lang, today, disabled, onSubmit, accounts, cat
     : selectedAccountId ?? accounts[0]?.accountId ?? '');
   const [toAccountId, setToAccountId] = useState(() => initial?.type === 'transfer' ? initial.toAccountId
     : accounts.find((entry) => entry.accountId !== accountId)?.accountId ?? '');
-  const [categoryId, setCategoryId] = useState(initial && initial.type !== 'transfer' ? initial.categoryId : '');
+  const [categoryId, setCategoryId] = useState(() => {
+    if (initial && initial.type !== 'transfer') return initial.categoryId;
+    return categories.find(({ id, type }) => id === defaultCategoryId && type === kind)?.id ?? '';
+  });
   const amount = useLocalizedInput(lang, initial ? formatAmount(
     initial.type === 'transfer' ? initial.fromAmountMinor : initial.amountMinor, lang,
   ) : '', amountInMinorUnits, formatAmount);
