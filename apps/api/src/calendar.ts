@@ -4,7 +4,7 @@ const compareDates = (a: CalendarDate, b: CalendarDate) => Temporal.PlainDate.co
 export type Frequency = 'once' | 'weekly' | 'monthly';
 export type ZoneVersion = { effectiveAt: number; timeZone: string };
 type RuleState = 'active' | 'paused' | 'ended';
-type RuleParameters = { amountMinor: string; categoryId: string; comment: string | null; endDate: string | null; state: RuleState };
+type RuleParameters = { amountMinor: string; categoryId: string; comment: string | null; source: string | null; endDate: string | null; state: RuleState };
 
 export type RuleVersion = {
   version: number;
@@ -37,6 +37,7 @@ export type ScheduledDate = {
   amountMinor: string;
   categoryId: string;
   comment: string | null;
+  source?: string;
   status: 'planned' | 'due' | 'paused';
 };
 
@@ -118,7 +119,7 @@ export function* calculateScheduleDates(rule: CalendarRule, history: readonly Zo
     if (rule.endsBeforeDate !== null && date >= rule.endsBeforeDate) return;
     const dueAt = Math.max(dueInZoneHistory(candidate, rule.createdAt, zones), rule.startsAt ?? rule.createdAt);
     const { settings, ruleVersion } = scheduleSettingsAt(versions, dueAt);
-    const { amountMinor, categoryId, comment = null, endDate, state } = settings;
+    const { amountMinor, categoryId, comment = null, source, endDate, state } = settings;
     if (state === 'ended') return;
     if (endDate && date > endDate) {
       if (dueAt >= lastEndDateEdit) return;
@@ -126,6 +127,6 @@ export function* calculateScheduleDates(rule: CalendarRule, history: readonly Zo
     }
     if (!amountMinor || !categoryId) throw new Error(`Incomplete schedule parameters for rule ${rule.id}`);
     yield { ruleId: rule.id, accountId: rule.accountId, kind: rule.kind, date, dueAt, ruleVersion, amountMinor, categoryId, comment,
-      status: state === 'paused' ? 'paused' : dueAt <= window.asOf ? 'due' : 'planned' };
+      ...(source && { source }), status: state === 'paused' ? 'paused' : dueAt <= window.asOf ? 'due' : 'planned' };
   }
 }

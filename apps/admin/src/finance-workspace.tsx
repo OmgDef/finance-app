@@ -328,7 +328,7 @@ function AccountHistory({ accountId, userId, lang, refresh, categories, onExpire
         const transaction = 'transactionVersion' in entry;
         const voided = transaction && entry.status === 'void';
         const label = transaction ? categoryLabel(entry.categoryId, categories, lang) : null;
-        const title = transaction ? entry.comment || label || t[entry.type] : t[entry.type];
+        const title = transaction ? entry.source || entry.incomeSource || entry.comment || label || t[entry.type] : t[entry.type];
         const details = [dateLabel(entry.date, lang), transaction && t[entry.type], voided && t.void,
           transaction && entry.actorRole === 'admin' && t.admin, !transaction && entry.type === 'adjustment' && entry.explanation]
           .filter(Boolean).join(' · ');

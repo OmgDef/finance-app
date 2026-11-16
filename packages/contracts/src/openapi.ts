@@ -39,7 +39,13 @@ for (const [operationId, route] of Object.entries(routes)) {
     requestBody: hasBody && !('optionalBody' in route)
       ? { required: true, content: { 'application/json': { schema: route.body } } } : undefined,
     responses: {
-      200: { description: 'Success', content: { 'application/json': { schema: route.result } } },
+      200: 'contentType' in route ? {
+        description: 'Statement PDF', content: { [route.contentType]: { schema: route.result } },
+        headers: {
+          'Content-Disposition': { schema: { type: 'string' }, description: 'Attachment filename including the period.' },
+          'Cache-Control': { schema: { type: 'string', const: 'no-store' } },
+        },
+      } : { description: 'Success', content: { 'application/json': { schema: route.result } } },
       429: {
         description: 'Fixed rate limit exceeded', headers: { 'Retry-After': { schema: { type: 'integer' } } },
         content: { 'application/json': { schema: errorSchema } },

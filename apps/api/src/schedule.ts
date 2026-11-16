@@ -9,6 +9,7 @@ import { same, verifier } from './crypto.ts';
 import { audit, one, rows } from './db.ts';
 import type { Runner, Tx } from './db.ts';
 import { AccessError } from './errors.ts';
+import { normalizeTransactionSource, transactionSourceFields } from './transaction-source.ts';
 import { readProfileCalendar } from './profile.ts';
 
 type StoredVersion = {
@@ -19,6 +20,8 @@ type StoredVersion = {
   categoryId: string | null;
   setsComment: number;
   comment: string | null;
+  setsSource: number;
+  source: string | null;
   setsEndDate: number;
   endDate: string | null;
   state: RuleVersion['changes']['state'] | null;
@@ -30,7 +33,7 @@ type CalendarRow = Omit<CalendarRule, 'versions'> & {
   zones: ZoneVersion[] | null;
   processedThrough: string | null;
   recoveryHeld: number;
-  outcomes: StoredOutcome[] | null;
+  outcomes: (Omit<StoredOutcome, 'source'> & { source: string | null })[] | null;
   failures: (ScheduleFailure & { date: string })[] | null;
   replacesRuleId: string | null;
   previousTransitionDate: string | null;
@@ -63,7 +66,7 @@ async function readCalendars(db: Runner, userId: string | undefined, asOf: numbe
     SELECT JSON_ARRAYAGG(JSON_OBJECT(
       'ruleId', o.rule_id, 'date', CAST(o.scheduled_date AS CHAR), 'dueAt', o.due_at, 'ruleVersion', o.rule_version,
       'kind', r.kind, 'amountMinor', CAST(o.amount_minor AS CHAR), 'categoryId', o.category_id, 'comment', o.comment,
-      'status', o.status, 'reason', o.reason, 'adjustmentId', o.adjustment_id, 'transactionId', o.transaction_id,
+      'source', o.income_source, 'status', o.status, 'reason', o.reason, 'adjustmentId', o.adjustment_id, 'transactionId', o.transaction_id,
       'sourceOccurrenceId', o.source_occurrence_id
     )) FROM schedule_occurrences o WHERE o.rule_id = r.id AND o.recorded_at <= ${asOf}
     ${mode === 'calendar' ? sql`` : sql`AND o.scheduled_date BETWEEN ${mode.fromDate} AND ${mode.throughDate}`}
@@ -85,7 +88,8 @@ async function readCalendars(db: Runner, userId: string | undefined, asOf: numbe
       (SELECT JSON_ARRAYAGG(JSON_OBJECT(
         'version', v.version, 'acceptedAt', v.accepted_at, 'effectiveAt', v.effective_at,
         'amountMinor', CAST(v.amount_minor AS CHAR), 'categoryId', v.category_id,
-        'setsComment', v.sets_comment, 'comment', v.comment, 'setsEndDate', v.sets_end_date,
+        'setsComment', v.sets_comment, 'comment', v.comment, 'setsSource', v.sets_income_source,
+        'source', v.income_source, 'setsEndDate', v.sets_end_date,
         'endDate', CAST(v.end_date AS CHAR), 'state', v.state
       )) FROM schedule_rule_versions v WHERE v.rule_id = r.id AND v.accepted_at <= ${asOf}) AS versions,
       ${mode === 'rules' ? sql`NULL` : sql`
@@ -104,6 +108,7 @@ async function readCalendars(db: Runner, userId: string | undefined, asOf: numbe
       if (row.amountMinor !== null) changes.amountMinor = row.amountMinor;
       if (row.categoryId !== null) changes.categoryId = row.categoryId;
       if (row.setsComment) changes.comment = row.comment;
+      if (row.setsSource) changes.source = row.source;
       if (row.setsEndDate) changes.endDate = row.endDate;
       if (row.state) changes.state = row.state;
       return { version: row.version, acceptedAt: row.acceptedAt, effectiveAt: row.effectiveAt, changes };
@@ -119,7 +124,9 @@ async function readCalendars(db: Runner, userId: string | undefined, asOf: numbe
       versions: replacedBy ? history.slice(0, -1) : history }, userId,
       latestVersion: history.at(-1), replaces, replacedBy,
       currency, zones: zones ?? [], processedThrough, recoveryHeld: Boolean(recoveryHeld),
-      outcomes: new Map((outcomes ?? []).map((outcome) => [outcome.date, outcome])), failures: failures ?? [] };
+      outcomes: new Map((outcomes ?? []).map(({ source, ...outcome }) =>
+        [outcome.date, { ...outcome, ...transactionSourceFields(outcome.kind, source) }])),
+      failures: failures ?? [] };
   });
 }
 
@@ -128,13 +135,13 @@ const lastStoredDate = '9999-12-31';
 
 function summarizeRule({ rule, currency, latestVersion, replaces, replacedBy, recoveryHeld }: StoredCalendar): RuleResult {
   const { settings } = scheduleSettingsAt(rule.versions, Infinity);
-  const { amountMinor, categoryId, state, comment = null, endDate = null } = settings;
+  const { amountMinor, categoryId, state, comment = null, source, endDate = null } = settings;
   if (!latestVersion || amountMinor === undefined || categoryId === undefined || state === undefined) {
     throw new Error('Incomplete schedule rule');
   }
   return { ruleId: rule.id, accountId: rule.accountId, currency, kind: rule.kind, frequency: rule.frequency,
     firstDate: rule.firstDate, amountMinor, categoryId, comment, endDate, state: replacedBy ? 'ended' : state,
-    ruleVersion: latestVersion.version, effectiveAt: latestVersion.effectiveAt,
+    ruleVersion: latestVersion.version, effectiveAt: latestVersion.effectiveAt, ...transactionSourceFields(rule.kind, source),
     ...(replaces && { replaces }), ...(replacedBy && { replacedBy }), ...(recoveryHeld && { recoveryHeld: true as const }) };
 }
 
@@ -228,15 +235,18 @@ function validateRuleEnd(frequency: RuleResult['frequency'], firstDate: string, 
 
 async function insertRuleVersion(tx: Tx, ruleId: string, { version, acceptedAt, effectiveAt, changes }: RuleVersion) {
   await tx.execute(sql`INSERT INTO schedule_rule_versions
-    (rule_id, version, accepted_at, effective_at, amount_minor, category_id, sets_comment, comment, sets_end_date, end_date, state)
+    (rule_id, version, accepted_at, effective_at, amount_minor, category_id, sets_comment, comment,
+      sets_income_source, income_source, sets_end_date, end_date, state)
     VALUES (${ruleId}, ${version}, ${acceptedAt}, ${effectiveAt}, ${changes.amountMinor ?? null}, ${changes.categoryId ?? null},
-      ${changes.comment !== undefined}, ${changes.comment ?? null}, ${changes.endDate !== undefined}, ${changes.endDate ?? null},
+      ${changes.comment !== undefined}, ${changes.comment ?? null}, ${changes.source !== undefined}, ${changes.source ?? null},
+      ${changes.endDate !== undefined}, ${changes.endDate ?? null},
       ${changes.state ?? null})`);
 }
 
 export function createScheduleRule(withAccess: WithCommandAccess, input: RuleCreate, role: ActorRole = 'user') {
   return retryFinanceWrite(() => withAccess(async (tx, userId, now, actorId) => {
     const { accountId, kind, frequency, firstDate, amountMinor, categoryId, comment = null, endDate = null } = input;
+    const source = normalizeTransactionSource(kind, input);
     const account = await requireScheduleAccount(tx, userId, accountId, true);
     if (firstDate < account.startDate) throw new AccessError(400, 'INVALID_REQUEST');
     validateRuleEnd(frequency, firstDate, endDate);
@@ -246,7 +256,7 @@ export function createScheduleRule(withAccess: WithCommandAccess, input: RuleCre
     await tx.execute(sql`INSERT INTO schedule_rules (id, account_id, kind, frequency, first_date, created_at)
       VALUES (${ruleId}, ${accountId}, ${kind}, ${frequency}, ${firstDate}, ${now})`);
     await insertRuleVersion(tx, ruleId, { version: 1, acceptedAt: now, effectiveAt: now,
-      changes: { amountMinor, categoryId, comment, endDate, state: 'active' } });
+      changes: { amountMinor, categoryId, comment, source, endDate, state: 'active' } });
     await audit(tx, now, role, 'schedule.rule.created', actorId, userId, ruleId,
       { from: '0', to: '1', ...('reason' in input && { reason: input.reason }) });
     return getScheduleRule(tx, userId, ruleId, now);
@@ -274,12 +284,14 @@ export function changeScheduleRule(withAccess: WithCommandAccess, ruleId: string
     let changes: RuleVersion['changes'];
     if (action === 'edit') {
       const { amountMinor, categoryId, comment, endDate } = input;
-      if (amountMinor === undefined && categoryId === undefined && comment === undefined && endDate === undefined) {
+      const source = normalizeTransactionSource(current.kind, input);
+      if (amountMinor === undefined && categoryId === undefined && comment === undefined &&
+          source === undefined && endDate === undefined) {
         throw new AccessError(400, 'INVALID_REQUEST');
       }
       validateRuleEnd(current.frequency, current.firstDate, endDate);
       await validateRuleAmountAndCategory(tx, current.kind, amountMinor, categoryId);
-      changes = { amountMinor, categoryId, comment, endDate };
+      changes = { amountMinor, categoryId, comment, source, endDate };
     } else {
       changes = { state: lifecycleState[action] };
     }
@@ -376,9 +388,11 @@ export function replaceScheduleRule(withAccess: WithCommandAccess, recoveryVersi
   const { accountId, kind, frequency, firstDate, amountMinor, categoryId, comment = null, endDate = null,
     expectedRuleVersion, previewToken, idempotencyKey } = input;
   const reason = 'reason' in input ? input.reason : undefined;
+  const source = normalizeTransactionSource(kind, input);
   const decisions = [...input.decisions].sort((a, b) => a.sourceDate.localeCompare(b.sourceDate));
   const parameters = [String(expectedRuleVersion), previewToken, kind, frequency, firstDate, amountMinor, categoryId,
     comment, endDate, reason ?? null, JSON.stringify(decisions.map(({ sourceDate, targetDate }) => [sourceDate, targetDate]))];
+  if (source !== undefined) parameters.push(source);
   return runCommand(withAccess, 'schedule.replace', recoveryVersion, idempotencyKey, [ruleId, accountId], parameters,
     async (tx, userId, now, apply, actorId) => {
       const sourceAccountId = await requireScheduleRuleAccount(tx, userId, ruleId);
@@ -399,8 +413,9 @@ export function replaceScheduleRule(withAccess: WithCommandAccess, recoveryVersi
 
         const { transitionDate, transitionAt } = preview;
         const newRuleId = randomUUID();
+        const replacementSource = source === undefined && kind === calendar.rule.kind ? summarizeRule(calendar).source : source;
         const initial: RuleVersion = { version: 1, acceptedAt: now, effectiveAt: transitionAt,
-          changes: { amountMinor, categoryId, comment, endDate, state: 'active' } };
+          changes: { amountMinor, categoryId, comment, source: replacementSource, endDate, state: 'active' } };
         const newRule: CalendarRule = { id: newRuleId, accountId, kind, frequency, firstDate, createdAt: now,
           startsAt: transitionAt, endsBeforeDate: null, versions: [initial] };
         const transfers = transferredSkips(decisions, preview, newRule, calendar.zones, now);
@@ -472,10 +487,10 @@ function clearScheduleFailure(tx: Tx, ruleId: string, date: string) {
 async function insertScheduleOutcome(tx: Tx, date: ScheduledDate, now: number, outcome: ScheduleOutcome) {
   const id = randomUUID();
   await tx.execute(sql`INSERT INTO schedule_occurrences
-    (id, rule_id, scheduled_date, due_at, rule_version, amount_minor, category_id, comment, status, recorded_at, reason,
+    (id, rule_id, scheduled_date, due_at, rule_version, amount_minor, category_id, comment, income_source, status, recorded_at, reason,
       adjustment_id, transaction_id, source_occurrence_id)
     VALUES (${id}, ${date.ruleId}, ${date.date}, ${date.dueAt}, ${date.ruleVersion}, ${date.amountMinor},
-      ${date.categoryId}, ${date.comment}, ${outcome.status}, ${now}, ${outcome.status === 'skipped' ? outcome.reason : null},
+      ${date.categoryId}, ${date.comment}, ${date.source ?? null}, ${outcome.status}, ${now}, ${outcome.status === 'skipped' ? outcome.reason : null},
       ${outcome.status === 'skipped' ? outcome.adjustmentId : null}, ${outcome.status === 'posted' ? outcome.transactionId : null},
       ${outcome.status === 'skipped' ? outcome.sourceOccurrenceId ?? null : null})`);
   await clearScheduleFailure(tx, date.ruleId, date.date);
@@ -666,8 +681,8 @@ export async function checkScheduleForArchive(tx: Tx, userId: string, accountId:
   if (hasFutureDates) throw new AccessError(409, 'SCHEDULE_FUTURE_DATES');
 }
 
-function toPreviewDate({ accountId: _accountId, ...date }: ScheduledDate): PreviewDate {
-  return date;
+function toPreviewDate({ accountId: _accountId, source, ...date }: ScheduledDate): PreviewDate {
+  return { ...date, ...transactionSourceFields(date.kind, source) };
 }
 
 function effectiveScheduleDates(calendar: StoredCalendar, window: ScheduleWindow) {
@@ -714,12 +729,17 @@ function compareOccurrences(a: PreviewDate, b: PreviewDate) {
 
 export function scheduleSelectionFingerprint(selection: ScheduleSelection) {
   const { ruleId, date, ruleVersion, dueAt, kind, amountMinor, categoryId, comment, reason } = selection;
-  return JSON.stringify([ruleId, date, ruleVersion, dueAt, kind, amountMinor, categoryId, comment, reason]);
+  const fields = [ruleId, date, ruleVersion, dueAt, kind, amountMinor, categoryId, comment, reason];
+  const source = selection.source ?? selection.incomeSource;
+  if (source !== undefined) fields.push(source);
+  return JSON.stringify(fields);
 }
 
 function sameScheduleParameters(date: ScheduledDate, selection: ScheduleSelection) {
   return date.ruleVersion === selection.ruleVersion && date.dueAt === selection.dueAt && date.kind === selection.kind &&
-    date.amountMinor === selection.amountMinor && date.categoryId === selection.categoryId && date.comment === selection.comment;
+    date.amountMinor === selection.amountMinor && date.categoryId === selection.categoryId && date.comment === selection.comment &&
+    (selection.source === undefined || date.source === selection.source) &&
+    (selection.incomeSource === undefined || (date.kind === 'income' && date.source === selection.incomeSource));
 }
 
 export async function validateReconciliationDates(tx: Tx, userId: string, accountId: string, asOf: number,

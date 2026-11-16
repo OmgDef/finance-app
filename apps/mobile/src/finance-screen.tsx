@@ -2,7 +2,7 @@ import { createContext, use, useEffect, useRef, useState } from 'react';
 import type { ComponentRef, ReactNode } from 'react';
 import { Redirect, Stack, useGlobalSearchParams, useIsFocused, useLocalSearchParams, usePathname, usePreventRemove, useRouter } from 'expo-router';
 import {
-  ActivityIndicator, Alert, Platform, Pressable, RefreshControl,
+  ActionSheetIOS, ActivityIndicator, Alert, Platform, Pressable, RefreshControl,
   StyleSheet, Text, View,
 } from 'react-native';
 import { KeyboardController, KeyboardStickyView, KeyboardToolbar } from 'react-native-keyboard-controller';
@@ -28,13 +28,14 @@ import { ScheduleScreen, scheduleOffset } from './finance-schedule';
 import { financeHref, financePage, financePath, routeParameter } from './finance-navigation';
 import type { FinancePage, FinanceRoute } from './finance-navigation';
 import { scheduleCopy } from './finance-schedule-copy';
+import { AccountStatementForm, statementCopy } from './finance-statement';
 import { StatisticsScreen, useStatistics } from './finance-statistics';
 import type { StatisticsFilterEditor, StatisticsPreset } from './finance-statistics';
 import { statisticsCopy } from './finance-statistics-copy';
 import { appTabs } from './finance-tabs';
 import type { FinanceTab } from './finance-tabs';
-import { revisionFields, TransactionVersions } from './finance-transaction';
-import { FinanceAlert, FinanceBrand, FinanceButton, FinanceScrollView, palette, styles } from './finance-ui';
+import { revisionFields, TransactionSummary } from './finance-transaction';
+import { FinanceAlert, FinanceButton, FinanceScrollView, palette, styles } from './finance-ui';
 import { SupportScreen } from './support-screen';
 
 type Account = Result<'listAccounts'>['accounts'][number];
@@ -427,6 +428,30 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
     if (page.name === 'statistics') statistics.refresh();
   }
 
+  function showTransactionActions(transactionId: string, version: number) {
+    const edit = () => go({ name: 'revise', transactionId, version });
+    const confirmVoid = () => Alert.alert(t.voidTitle, t.voidExplanation, [
+      { text: copy[lang].cancel, style: 'cancel' },
+      { text: t.voidTransaction, style: 'destructive', onPress: () => void command.submit({
+        kind: 'transaction.void', transactionId, body: { expectedTransactionVersion: version },
+      }) },
+    ]);
+    if (Platform.OS === 'ios') {
+      ActionSheetIOS.showActionSheetWithOptions({
+        options: [t.editTransaction, t.voidTransaction, copy[lang].cancel], destructiveButtonIndex: 1, cancelButtonIndex: 2,
+      }, (button) => {
+        if (button === 0) edit();
+        if (button === 1) confirmVoid();
+      });
+    } else {
+      Alert.alert(t.transactionActions, undefined, [
+        { text: t.editTransaction, onPress: edit },
+        { text: copy[lang].cancel, style: 'cancel' },
+        { text: t.voidTransaction, style: 'destructive', onPress: confirmVoid },
+      ], { cancelable: true });
+    }
+  }
+
   function screenTitle() {
     switch (page.name) {
       case 'archive': return t.archived;
@@ -434,6 +459,7 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
       case 'addAccount': return t.addAccount;
       case 'manage': return t.manageAccount;
       case 'reconcile': return t.reconcileAccount;
+      case 'statement': return statementCopy[lang].title;
       case 'history': return account?.name ?? t.history;
       case 'accountEditor': {
         const { editor } = page;
@@ -442,7 +468,7 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
       }
       case 'record': return transactionLabels[page.kind];
       case 'revise': return t.editTransaction;
-      case 'transaction': return activeTransaction ? historyTitles[activeTransaction.type] : t.transactionVersions;
+      case 'transaction': return activeTransaction ? historyTitles[activeTransaction.type] : t.transactionDetails;
       case 'schedule': {
         if (page.editor) return { create: s.newRule, edit: s.edit, replace: s.replacing }[page.editor];
         if (page.skipDate) return s.skip;
@@ -473,6 +499,7 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
         totalsError={!!monthlyActivity.error} history={history.data} historyBusy={history.busy} historyError={!!history.error}
         accountError={listError ? t.accountOverviewError : accounts && !account ? t.unavailable : undefined}
         refreshing={refreshing} onRefresh={refresh}
+        statementTitle={statementCopy[lang].title} onStatement={() => go({ name: 'statement', accountId: page.accountId })}
         created={receipt?.command === 'account.create'}
         onOpenCard={(cardId) => go({ name: 'cardDetails', accountId: page.accountId, cardId })}
         onManageCards={() => go({ name: 'manage', accountId: page.accountId })}
@@ -492,7 +519,16 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
   const footerOffset = quickExpense ? Math.max(0, footerHeight - bottom) : 0;
   const renderScreen = (transactionForm?: ReactNode, footer?: ReactNode) => <SafeAreaView style={layout.container}
     edges={inStack ? ['left', 'right'] : ['top', 'left', 'right']}>
-    {inStack && <Stack.Screen options={{ title: screenTitle(), gestureEnabled: !writing }} />}
+    {inStack && <Stack.Screen options={{
+      title: screenTitle(), gestureEnabled: !writing,
+      headerRight: page.name === 'transaction' && activeTransaction && accounts && initialRevision && !archivedTransaction
+        ? () => <Pressable accessibilityRole="button" accessibilityLabel={t.transactionActions}
+          disabled={blocked || transaction.busy || transactionChanged} testID="finance-transaction-actions"
+          onPress={() => showTransactionActions(page.transactionId, activeTransaction.transactionVersion)}
+          style={({ pressed }) => [layout.transactionActions, (pressed || blocked || transaction.busy || transactionChanged) && styles.dimmed]}>
+          <Text accessible={false} style={layout.transactionActionsIcon}>⋯</Text>
+        </Pressable> : undefined,
+    }} />}
     <FinanceScrollView ref={scroll} key={page.name + (historyId ?? '')} nativeTab={!inStack}
       bottomOffset={showKeyboardToolbar ? 64 : footerOffset + 12} extraKeyboardSpace={showKeyboardToolbar ? 42 : footerOffset}
       disableScrollOnKeyboardHide
@@ -502,7 +538,6 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
         (page.name === 'schedule' && !page.editor && !page.skipDate)
         ? <RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={palette.accent} colors={[palette.accent]} />
         : undefined}>
-      {showOverview && <FinanceBrand title={copy[lang].appName} />}
       {page.name === 'statistics' && <Text accessibilityRole="header" style={styles.heading}>{statisticsCopy[lang].title}</Text>}
       {showingSupport && <Text accessibilityRole="header" style={styles.heading}>{copy[lang].help}</Text>}
       {showingSupport && focused && <SupportScreen lang={lang} showHeading={false} />}
@@ -586,7 +621,7 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
       </View>}
 
       {(financeTab || page.name === 'archive' || page.name === 'schedule' || page.name === 'accountSettings' ||
-        page.name === 'manage' || page.name === 'accountEditor' ||
+        page.name === 'manage' || page.name === 'accountEditor' || page.name === 'statement' ||
         page.name === 'transaction' || reconciling || !!formKind) && listError !== '' && <>
         <FinanceAlert>{localizedError(listError, lang, reconciling ? 'reconcile' : undefined)}</FinanceAlert>
         <FinanceButton title={copy[lang].retry} onPress={() => void loadAccounts()} />
@@ -715,6 +750,10 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
           lang={lang} visible={focused} disabled={blocked || command.error === 'ACCOUNT_UNAVAILABLE'}
           commandError={command.error}
           onSubmit={(body) => void command.submit({ kind: 'account.reconcile', accountId: account.accountId, body })} />)}
+      {page.name === 'statement' && (account
+        ? <AccountStatementForm key={account.accountId + account.startDate + today + lang}
+          account={account} access={access} lang={lang} focused={focused} />
+        : !accounts && !listError && <ActivityIndicator color={palette.accent} accessibilityLabel={t.loading} />)}
       {transactionId && <>
         {transaction.busy && <ActivityIndicator color={palette.accent} accessibilityLabel={t.loading} />}
         {transaction.error && <>
@@ -726,7 +765,7 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
         <FinanceAlert>{t.unavailable}</FinanceAlert>}
       {page.name === 'revise' && transactionChanged && command.error === '' &&
         <FinanceAlert>{t.versionConflict}</FinanceAlert>}
-      {accountId && (page.name === 'manage' || page.name === 'reconcile' || page.name === 'accountEditor') &&
+      {accountId && (page.name === 'manage' || page.name === 'reconcile' || page.name === 'accountEditor' || page.name === 'statement') &&
         accounts && !account && !listError && <FinanceAlert>{t.unavailable}</FinanceAlert>}
       {formKind && <>
         {formKind !== 'transfer' && categoryError && <>
@@ -737,24 +776,10 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
           <ActivityIndicator color={palette.accent} accessibilityLabel={t.loading} />}
         {transactionForm}
       </>}
-      {page.name === 'transaction' && <>
-        {activeTransaction && <>
-          {archivedTransaction && currentVersion?.status === 'posted' && <Text style={styles.meta}>{t.archivedTransaction}</Text>}
-          {accounts && initialRevision && !archivedTransaction && <View style={layout.actions}>
-            <FinanceButton title={t.editTransaction} onPress={() => go({ name: 'revise', transactionId: page.transactionId, version: activeTransaction.transactionVersion })}
-              disabled={blocked || transaction.busy || transactionChanged} testID="finance-edit-transaction" />
-            <FinanceButton title={t.voidTransaction} testID="finance-void-transaction"
-              disabled={blocked || transaction.busy || transactionChanged}
-              onPress={() => Alert.alert(t.voidTitle, t.voidExplanation, [
-                { text: copy[lang].cancel, style: 'cancel' },
-                { text: t.voidTransaction, style: 'destructive', onPress: () => void command.submit({
-                  kind: 'transaction.void', transactionId: page.transactionId,
-                  body: { expectedTransactionVersion: activeTransaction.transactionVersion },
-                }) },
-              ])} />
-          </View>}
-          <TransactionVersions history={activeTransaction} lang={lang} accounts={accounts ?? []} categories={categories ?? []} />
-        </>}
+      {page.name === 'transaction' && activeTransaction && currentVersion && <>
+        <TransactionSummary history={activeTransaction} current={currentVersion} lang={lang} timeZone={timeZone}
+          accounts={accounts ?? []} categories={categories ?? []} />
+        {archivedTransaction && currentVersion.status === 'posted' && <Text style={styles.meta}>{t.archivedTransaction}</Text>}
       </>}
     </FinanceScrollView>
     {footer && <KeyboardStickyView enabled={focused} offset={{ opened: bottom }} style={layout.formFooter}
@@ -812,6 +837,8 @@ function AccountRow({ account, lang, divider, open }: { account: Account; lang: 
 }
 
 const layout = StyleSheet.create({
+  transactionActions: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
+  transactionActionsIcon: { color: palette.ink, fontSize: 24, fontWeight: '600' },
   container: { flex: 1, backgroundColor: palette.ground },
   accountGroup: { overflow: 'hidden' },
   formFooter: { backgroundColor: palette.panel, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: palette.line },

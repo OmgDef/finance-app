@@ -3,10 +3,11 @@ import { sql } from 'drizzle-orm';
 import { rows } from './db.ts';
 import type { Tx } from './db.ts';
 import { AccessError } from './errors.ts';
+import { transactionSourceFields } from './transaction-source.ts';
 
 type AccountHistory = Result<'listAccountHistory'>;
 type Entry = AccountHistory['entries'][number];
-type HistoryRow = { currency: AccountHistory['currency'] } & (Entry | { type: null });
+type HistoryRow = { currency: AccountHistory['currency']; transactionSource: string | null } & (Entry | { type: null });
 const pageSize = 50;
 
 export async function listAccountHistory(tx: Tx, userId: string, accountId: string,
@@ -27,13 +28,13 @@ export async function listAccountHistory(tx: Tx, userId: string, accountId: stri
     ), history_entries AS (
       SELECT a.id, a.start_date AS date, 'opening' AS type, a.opening_balance_minor AS amountMinor,
         NULL AS explanation, NULL AS actorRole, NULL AS transactionVersion, NULL AS status,
-        NULL AS categoryId, NULL AS comment
+        NULL AS categoryId, NULL AS comment, NULL AS transactionSource
       FROM owned_account a
       UNION ALL
-      SELECT b.id, b.financial_date, 'adjustment', b.delta_minor, b.explanation, b.actor_role, NULL, NULL, NULL, NULL
+      SELECT b.id, b.financial_date, 'adjustment', b.delta_minor, b.explanation, b.actor_role, NULL, NULL, NULL, NULL, NULL
       FROM owned_account a JOIN balance_adjustments b ON b.account_id = a.id
       UNION ALL
-      SELECT t.id, v.financial_date, t.kind, m.amount_minor, NULL, v.actor_role, v.version, v.status, v.category_id, v.comment
+      SELECT t.id, v.financial_date, t.kind, m.amount_minor, NULL, v.actor_role, v.version, v.status, v.category_id, v.comment, v.income_source
       FROM owned_account a JOIN movements m ON m.account_id = a.id
       JOIN transactions t ON t.id = m.transaction_id AND t.user_id = ${userId}
       JOIN transaction_versions v ON v.transaction_id = t.id AND v.version = t.current_version
@@ -44,7 +45,7 @@ export async function listAccountHistory(tx: Tx, userId: string, accountId: stri
       ORDER BY date DESC, id DESC LIMIT ${pageSize + 1}
     )
     SELECT a.currency, h.id, CAST(h.date AS CHAR) AS date, h.type, CAST(h.amountMinor AS CHAR) AS amountMinor,
-      h.explanation, h.actorRole, h.transactionVersion, h.status, h.categoryId, h.comment
+      h.explanation, h.actorRole, h.transactionVersion, h.status, h.categoryId, h.comment, h.transactionSource
     FROM owned_account a LEFT JOIN history_page h ON TRUE ORDER BY h.date DESC, h.id DESC`);
   if (!history.length) throw new AccessError(404, 'NOT_FOUND');
 
@@ -57,8 +58,9 @@ export async function listAccountHistory(tx: Tx, userId: string, accountId: stri
     } else if (row.type === 'adjustment') {
       entries.push({ id, date, type: row.type, amountMinor, explanation: row.explanation, actorRole: row.actorRole });
     } else {
-      const { actorRole, transactionVersion, status, categoryId, comment } = row;
-      entries.push({ id, date, type: row.type, amountMinor, actorRole, transactionVersion, status, categoryId, comment });
+      const { actorRole, transactionVersion, status, categoryId, comment, transactionSource } = row;
+      entries.push({ id, date, type: row.type, amountMinor, actorRole, transactionVersion, status, categoryId, comment,
+        ...transactionSourceFields(row.type, transactionSource) });
     }
   }
   const last = entries.at(-1);

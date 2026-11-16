@@ -3,10 +3,12 @@ import { sql } from 'drizzle-orm';
 import { one } from './db.ts';
 import type { Tx } from './db.ts';
 import { AccessError } from './errors.ts';
+import { transactionSourceFields } from './transaction-source.ts';
 import { readProfileCalendar } from './profile.ts';
 
 type Statistics = Result<'getStatistics'>;
-type Aggregates = Pick<Required<Statistics>, 'totals' | 'categories' | 'entries' | 'weeks'>;
+type StoredEntry = Statistics['entries'][number] & { transactionSource: string | null };
+type Aggregates = Pick<Required<Statistics>, 'totals' | 'categories' | 'weeks'> & { entries: StoredEntry[] };
 
 const pageSize = 50;
 const compareText = (a: string, b: string) => a === b ? 0 : a < b ? -1 : 1;
@@ -48,7 +50,8 @@ export async function getStatistics(tx: Tx, userId: string, now: number, query: 
   const report = await one<{ accountAllowed: number } & { [K in keyof Aggregates]: Aggregates[K] | null }>(tx, sql`
     WITH posted AS (
       SELECT t.id AS transactionId, v.version AS transactionVersion, v.financial_date AS date, t.kind AS type,
-        a.id AS accountId, CAST(a.currency AS CHAR) AS currency, v.category_id AS categoryId, v.comment, m.amount_minor AS amountMinor
+        a.id AS accountId, CAST(a.currency AS CHAR) AS currency, v.category_id AS categoryId, v.comment,
+        v.income_source AS transactionSource, m.amount_minor AS amountMinor
       FROM transactions t
       JOIN transaction_versions v ON v.transaction_id = t.id AND v.version = t.current_version
       JOIN movements m ON m.transaction_id = t.id AND m.transaction_version = v.version
@@ -86,7 +89,7 @@ export async function getStatistics(tx: Tx, userId: string, now: number, query: 
         'incomeMinor', CAST(incomeMinor AS CHAR), 'expenseMinor', CAST(expenseMinor AS CHAR))) FROM weeks)` : sql`NULL`} AS weeks,
       (SELECT JSON_ARRAYAGG(JSON_OBJECT('transactionId', transactionId, 'transactionVersion', transactionVersion,
         'date', CAST(date AS CHAR), 'type', type, 'accountId', accountId, 'currency', currency,
-        'categoryId', categoryId, 'comment', comment, 'amountMinor', CAST(amountMinor AS CHAR))) FROM page) AS entries`);
+        'categoryId', categoryId, 'comment', comment, 'transactionSource', transactionSource, 'amountMinor', CAST(amountMinor AS CHAR))) FROM page) AS entries`);
   if (!report) throw new Error('Missing statistics snapshot');
   if (!report.accountAllowed) throw new AccessError(404, 'NOT_FOUND');
 
@@ -101,7 +104,8 @@ export async function getStatistics(tx: Tx, userId: string, now: number, query: 
   const page = report.entries ?? [];
   // JSON_ARRAYAGG does not preserve the order of the limited page.
   page.sort((a, b) => compareText(b.date, a.date) || compareText(b.transactionId, a.transactionId));
-  const entries = page.slice(0, pageSize);
+  const entries = page.slice(0, pageSize).map(({ transactionSource, ...entry }) =>
+    ({ ...entry, ...transactionSourceFields(entry.type, transactionSource) }));
   const last = entries.at(-1);
   const weeks = byWeek ? (report.weeks ?? []).sort((a, b) =>
     a.weekIndex - b.weekIndex || a.currency.localeCompare(b.currency)) : undefined;

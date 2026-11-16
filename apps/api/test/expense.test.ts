@@ -10,7 +10,7 @@ import { buildApp } from '../src/app.ts';
 import { configFromEnv } from '../src/config.ts';
 import { base32, token, verifier } from '../src/crypto.ts';
 import { connect, hasDatabaseError, one, rows } from '../src/db.ts';
-import { processScheduleDate, recordScheduleDateFailure } from '../src/finance.ts';
+import { accountStatementRowLimit, processScheduleDate, readAccountStatement, recordScheduleDateFailure } from '../src/finance.ts';
 import { readScheduleDates } from '../src/schedule.ts';
 import type { ScheduleCandidate } from '../src/schedule.ts';
 
@@ -1377,6 +1377,115 @@ test('Finance API against migrated MySQL', async (t) => {
       { command: 'transaction.revise', command_key: winningInput.idempotencyKey },
       { command: 'transaction.void', command_key: cancellation.idempotencyKey },
     ]);
+  });
+
+  await t.test('Income source is visible in ledger reads and supports revision and explicit clearing', async () => {
+    const { accountId, session, expense, newKey } = await fixture();
+    expectError(await send(app, 'recordTransaction', { ...expense, incomeSource: 'Bank' }, session), 400, 'INVALID_REQUEST');
+    const input = { ...expense, type: 'income', categoryId: 'other-income', incomeSource: '  Example Bank  ' } as const;
+    const recorded = await send(app, 'recordTransaction', input, session);
+    assert.equal(recorded.statusCode, 200, recorded.body);
+    const { transactionId } = recorded.json<SingleAccountResult>();
+    expectError(await send(app, 'recordTransaction', { ...input, incomeSource: 'Other bank' }, session),
+      409, 'IDEMPOTENCY_CONFLICT');
+
+    const { incomeSource: _source, ...fields } = input;
+    const revised = await send(app, 'reviseTransaction', { ...fields, expectedTransactionVersion: 1, idempotencyKey: newKey() },
+      session, transactionId);
+    assert.equal(revised.statusCode, 200, revised.body);
+    const ledger = await send(app, 'listAccountHistory', undefined, session, accountId);
+    assert.equal(ledger.statusCode, 200, ledger.body);
+    const entry = ledger.json<Result<'listAccountHistory'>>().entries.find(({ id }) => id === transactionId);
+    assert.equal(entry?.type === 'income' && entry.incomeSource, 'Example Bank');
+    assert.equal(entry?.type === 'income' && entry.source, 'Example Bank');
+    assert.equal((await readStatistics(session)).entries.find((item) => item.transactionId === transactionId)?.incomeSource, 'Example Bank');
+
+    const cleared = await send(app, 'reviseTransaction', {
+      ...fields, expectedTransactionVersion: 2, idempotencyKey: newKey(), incomeSource: null,
+    }, session, transactionId);
+    assert.equal(cleared.statusCode, 200, cleared.body);
+    const history = await send(app, 'listTransactionVersions', undefined, session, transactionId);
+    assert.equal(history.statusCode, 200, history.body);
+    assert.deepEqual(history.json<Result<'listTransactionVersions'>>().versions.map(({ incomeSource }) => incomeSource),
+      ['Example Bank', 'Example Bank', undefined]);
+  });
+
+  await t.test('A late scheduled income keeps the source effective on the date it was due', async () => {
+    const previous = now;
+    try {
+      now = Date.parse('2027-02-01T01:00:00Z');
+      const { userId, accountId, session, installationSecret } = await fixture();
+      const firstDate = '2027-02-01';
+      const created = await send(app, 'createScheduleRule', {
+        ...scheduleInput(accountId, firstDate), kind: 'income', categoryId: 'other-income', incomeSource: 'First payer',
+      }, session);
+      assert.equal(created.statusCode, 200, created.body);
+      const { ruleId } = created.json<Result<'createScheduleRule'>>();
+      const changed = await send(app, 'changeScheduleRule', {
+        action: 'edit', expectedRuleVersion: 1, incomeSource: 'Next payer',
+      }, session, ruleId);
+      assert.equal(changed.statusCode, 200, changed.body);
+      const actualPostingTime = Date.parse('2027-02-02T01:23:45Z');
+      const outcome = await processScheduleDate(db, { userId, accountId, ruleId, date: firstDate }, () => actualPostingTime);
+      assert.equal(outcome?.status, 'posted');
+      now = actualPostingTime;
+      const refreshedSession = await renewMobileSession(installationSecret);
+      const history = await send(app, 'listTransactionVersions', undefined, refreshedSession, outcome.transactionId);
+      assert.equal(history.statusCode, 200, history.body);
+      const [version] = history.json<Result<'listTransactionVersions'>>().versions;
+      assert.equal(version.incomeSource, 'First payer');
+      assert.equal(version.date, firstDate);
+      assert.equal(version.createdAt, new Date(actualPostingTime).toISOString());
+
+      const calendar = await occurrences(refreshedSession, firstDate, '2027-02-08', ruleId);
+      assert.equal(calendar.statusCode, 200, calendar.body);
+      assert.deepEqual(calendar.json<Result<'listScheduleOccurrences'>>().occurrences.map(({ incomeSource, status }) =>
+        [incomeSource, status]), [['First payer', 'posted'], ['Next payer', 'planned']]);
+    } finally {
+      now = previous;
+    }
+  });
+
+  await t.test('Expense sources work for manual records, scheduled posting, and clearing on edit', async () => {
+    const { userId, accountId, session, expense, newKey } = await fixture();
+    const manual = await send(app, 'recordTransaction', { ...expense, source: '  Local shop  ' }, session);
+    assert.equal(manual.statusCode, 200, manual.body);
+    const { transactionId: manualId } = manual.json<SingleAccountResult>();
+
+    const created = await send(app, 'createScheduleRule', {
+      ...scheduleInput(accountId, expense.date), frequency: 'once', categoryId: 'education', source: 'Learning site',
+    }, session);
+    assert.equal(created.statusCode, 200, created.body);
+    const rule = created.json<Result<'createScheduleRule'>>();
+    assert.equal(rule.source, 'Learning site');
+    assert.equal(rule.incomeSource, undefined);
+    const occurrence = await processScheduleDate(db, { userId, accountId, ruleId: rule.ruleId, date: rule.firstDate }, () => now);
+    assert.equal(occurrence?.status, 'posted');
+    const scheduledId = occurrence.transactionId;
+    const calendar = await occurrences(session, rule.firstDate, rule.firstDate, rule.ruleId);
+    assert.equal(calendar.statusCode, 200, calendar.body);
+    assert.equal(calendar.json<Result<'listScheduleOccurrences'>>().occurrences[0].source, 'Learning site');
+
+    const ledger = await send(app, 'listAccountHistory', undefined, session, accountId);
+    assert.equal(ledger.statusCode, 200, ledger.body);
+    const entries = ledger.json<Result<'listAccountHistory'>>().entries;
+    const manualEntry = entries.find(({ id }) => id === manualId);
+    const scheduledEntry = entries.find(({ id }) => id === scheduledId);
+    assert.ok(manualEntry?.type === 'expense' && scheduledEntry?.type === 'expense');
+    assert.equal(manualEntry.source, 'Local shop');
+    assert.equal(scheduledEntry.source, 'Learning site');
+    assert.equal(scheduledEntry.incomeSource, undefined);
+    assert.equal((await readStatistics(session)).entries.find(({ transactionId }) => transactionId === scheduledId)?.source, 'Learning site');
+
+    const cleared = await send(app, 'reviseTransaction', {
+      ...expense, categoryId: 'education', expectedTransactionVersion: 1,
+      amountMinor: rule.amountMinor, idempotencyKey: newKey(), source: null,
+    }, session, scheduledId);
+    assert.equal(cleared.statusCode, 200, cleared.body);
+    const history = await send(app, 'listTransactionVersions', undefined, session, scheduledId);
+    assert.equal(history.statusCode, 200, history.body);
+    assert.deepEqual(history.json<Result<'listTransactionVersions'>>().versions.map(({ source }) => source),
+      ['Learning site', undefined]);
   });
 
   await t.test('An income revision can move its credit to another owned account and rolls back on failure', async () => {
@@ -3000,6 +3109,126 @@ test('Finance API against migrated MySQL', async (t) => {
     assert.equal(payment?.date, '2028-02-01');
     assert.equal(payment?.comment, 'Annual insurance');
     assert.equal(payment?.amountMinor, '10000');
+  });
+
+  await t.test('Account statements use the latest posted ledger, inclusive dates, and an owned account', async (t) => {
+    const previousNow = now;
+    t.after(() => { now = previousNow; });
+    now = Date.parse('2027-02-28T15:59:00Z'); // One minute before midnight in Asia/Makassar.
+    const { accountId, userId, session, newKey, installationSecret } = await fixture();
+    const other = await fixture();
+    const usd = randomUUID();
+    const first = '2027-02-01';
+    const last = '2027-02-28';
+    const query = { fromDate: first, throughDate: last, lang: 'ru' as const };
+    await db.execute(sql`UPDATE accounts SET opening_balance_minor = 110000 WHERE id = ${accountId}`);
+    await db.execute(sql`INSERT INTO accounts (id, user_id, name, currency, start_date, opening_balance_minor)
+      VALUES (${usd}, ${userId}, 'USD wallet', 'USD', '2027-01-01', 10000)`);
+
+    async function record(type: 'expense' | 'income', date: string, amountMinor: string) {
+      const response = await send(app, 'recordTransaction', {
+        type, accountId, date, amountMinor, categoryId: type === 'income' ? 'salary' : 'groceries', idempotencyKey: newKey(),
+      }, session);
+      assert.equal(response.statusCode, 200, response.body);
+      return response.json<SingleAccountResult>();
+    }
+    function download(bearer: string | undefined, account = accountId, filters = query) {
+      return send(app, 'getAccountStatement', undefined, bearer, account, undefined, new URLSearchParams(filters));
+    }
+    const read = (filters = query, account = accountId) =>
+      db.transaction((tx) => readAccountStatement(tx, userId, account, now, filters));
+
+    await record('expense', '2027-01-31', '10000');
+    await record('income', first, '10000');
+    const expense = await record('expense', last, '5100');
+    const edit = (amountMinor: string, expectedTransactionVersion: number) =>
+      send(app, 'reviseTransaction', { type: 'expense', accountId, date: last, amountMinor, categoryId: 'groceries',
+        comment: 'Исправленный расход', expectedTransactionVersion, idempotencyKey: newKey(),
+      }, session, expense.transactionId);
+    assert.equal((await edit('5000', 1)).statusCode, 200);
+    const canceled = await record('expense', first, '9900');
+    const voidResponse = await send(app, 'voidTransaction', { expectedTransactionVersion: 1, idempotencyKey: newKey() },
+      session, canceled.transactionId);
+    assert.equal(voidResponse.statusCode, 200, voidResponse.body);
+
+    const transfer = await send(app, 'recordTransaction', {
+      type: 'transfer', fromAccountId: usd, toAccountId: accountId, fromAmountMinor: '10000', toAmountMinor: '9200',
+      date: last, idempotencyKey: newKey(),
+    }, session);
+    assert.equal(transfer.statusCode, 200, transfer.body);
+    const reconciliation = await send(app, 'reconcileAccountBalance', {
+      expectedAccountVersion: transfer.json<TransferResult>().toAccount.accountVersion, actualBalanceMinor: '114000',
+      explanation: 'Проверено по выписке', idempotencyKey: newKey(),
+    }, session, accountId);
+    assert.equal(reconciliation.statusCode, 200, reconciliation.body);
+    expectError(await download(session, accountId, { ...query, throughDate: '2027-03-01' }), 400, 'INVALID_REQUEST');
+    now += 2 * 60 * 1000;
+    await record('income', '2027-03-01', '700');
+
+    const statement = await read();
+    assert.deepEqual([statement.openingMinor, statement.incomingMinor, statement.outgoingMinor,
+      statement.adjustmentsMinor, statement.closingMinor], ['100000', '19200', '5000', '-200', '114000']);
+    assert.deepEqual(statement.entries.map(({ date }) => date), [first, last, last, last]);
+    assert.deepEqual(statement.entries.map(({ kind, amountMinor }) => [kind, amountMinor]).sort(),
+      [['adjustment', '-200'], ['expense', '-5000'], ['income', '10000'], ['transfer', '9200']]);
+    assert.equal(statement.entries.find(({ kind }) => kind === 'expense')?.description, 'Исправленный расход');
+    const oneDay = await read({ ...query, throughDate: first });
+    assert.deepEqual([oneDay.openingMinor, oneDay.closingMinor, oneDay.entries.length], ['100000', '110000', 1]);
+    const empty = await read({ ...query, fromDate: '2027-02-02', throughDate: '2027-02-02' });
+    assert.deepEqual([empty.openingMinor, empty.closingMinor, empty.entries], ['110000', '110000', []]);
+
+    const response = await download(session);
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.headers['content-type'], 'application/pdf');
+    assert.equal(response.headers['content-disposition'], 'attachment; filename="statement-2027-02-01-2027-02-28.pdf"');
+    assert.equal(response.headers['cache-control'], 'no-store');
+    assert.equal(response.rawPayload.subarray(0, 5).toString(), '%PDF-');
+    expectError(await download(other.session), 404, 'NOT_FOUND');
+    expectError(await download(session, randomUUID()), 404, 'NOT_FOUND');
+    expectError(await download(undefined), 401, 'SESSION_EXPIRED');
+    expectError(await download(session, accountId, { ...query, fromDate: '2026-12-31' }), 400, 'INVALID_REQUEST');
+    expectError(await download(session, accountId, { ...query, fromDate: '2027-02-30' }), 400, 'INVALID_REQUEST');
+    expectError(await download(session, accountId, { ...query, fromDate: last, throughDate: first }), 400, 'INVALID_REQUEST');
+
+    const [duringEdit, edited] = await Promise.all([read(), edit('5500', 2)]);
+    assert.equal(edited.statusCode, 200, edited.body);
+    const duringExpense = duringEdit.entries.find(({ kind }) => kind === 'expense')?.amountMinor;
+    assert.deepEqual([duringExpense, duringEdit.closingMinor],
+      duringEdit.outgoingMinor === '5000' ? ['-5000', '114000'] : ['-5500', '113500']);
+    assert.equal((await read()).closingMinor, '113500');
+
+    const archive = await send(app, 'archiveAccount', undefined, session, usd);
+    assert.equal(archive.statusCode, 200, archive.body);
+    const archived = await read(query, usd);
+    assert.deepEqual([archived.currency, archived.outgoingMinor, archived.closingMinor], ['USD', '10000', '0']);
+    assert.equal((await download(session, usd)).statusCode, 200);
+    const current = await renewMobileSession(installationSecret);
+    expectError(await download(session), 401, 'SESSION_EXPIRED');
+    assert.equal((await download(current)).statusCode, 200);
+  });
+
+  await t.test('A statement includes more than one history page and rejects over-limit reports', async (t) => {
+    const previousNow = now;
+    t.after(() => { now = previousNow; });
+    now = Date.parse('2027-02-03T00:00:00Z');
+    const { accountId, userId, session } = await fixture();
+    await db.execute(sql`
+      INSERT INTO balance_adjustments (id, account_id, account_version, financial_date, created_at, covered_through,
+        balance_before_minor, actual_balance_minor, delta_minor, explanation, actor_role)
+      WITH RECURSIVE sequence AS (
+        SELECT 0 AS n UNION ALL SELECT n + 1 FROM sequence WHERE n < 49
+      )
+      SELECT UUID(), ${accountId}, a.n * 50 + b.n + 2, IF(a.n = 0, '2027-02-01', '2027-02-02'),
+        ${now}, '2027-02-02', 100000, 100000, 0, 'Checked', 'user'
+      FROM sequence a CROSS JOIN sequence b ORDER BY a.n, b.n LIMIT ${accountStatementRowLimit + 1}`);
+    const query = { fromDate: '2027-02-02', throughDate: '2027-02-02', lang: 'en' as const };
+    const withinLimit = await db.transaction((tx) => readAccountStatement(tx, userId, accountId, now, query));
+    assert.equal(withinLimit.entries.length, accountStatementRowLimit + 1 - 50);
+    const tooLarge = await send(app, 'getAccountStatement', undefined, session, accountId, undefined,
+      new URLSearchParams({ ...query, fromDate: '2027-02-01' }));
+    expectError(tooLarge, 422, 'STATEMENT_TOO_LARGE');
+    assert.match(String(tooLarge.headers['content-type']), /^application\/json/);
+    assert.equal(tooLarge.headers['content-disposition'], undefined);
   });
 
   await t.test('Statistics defaults to the profile month and validates access and period bounds', async (t) => {

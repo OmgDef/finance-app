@@ -291,6 +291,9 @@ export function ScheduleScreen({ page, access, accounts, categories, lang, disab
       <Text style={styles.meta}>{formatFinancialDate(selectedRule.firstDate, lang)}
         {selectedRule.endDate && ' – ' + formatFinancialDate(selectedRule.endDate, lang)}</Text>
       <Text style={styles.meta} testID="schedule-effective-at">{t.effective} {formatProfileMoment(selectedRule.effectiveAt, timeZone, lang)}</Text>
+      {(selectedRule.source ?? selectedRule.incomeSource)
+        ? <Text style={styles.title}>{f.transactionSource} · {selectedRule.source ?? selectedRule.incomeSource}</Text>
+        : <Text style={styles.meta}>{f.noTransactionSource}</Text>}
       {selectedRule.comment && <Text style={styles.label}>{selectedRule.comment}</Text>}
       {[{ link: selectedRule.replaces, label: t.oldRule }, { link: selectedRule.replacedBy, label: t.nextRule }].map(({ link, label }) => link &&
         <View key={link.ruleId} style={layout.group}>
@@ -339,6 +342,7 @@ export function ScheduleScreen({ page, access, accounts, categories, lang, disab
             </View>
             <Text style={entry.status === 'needs_intervention' ? styles.alert : styles.meta}>{t[entry.status]}
               {!ruleId && ' · ' + (accounts?.find((item) => item.accountId === entry.accountId)?.name ?? t.unavailable)}</Text>
+            {(entry.source ?? entry.incomeSource) && <Text style={styles.title}>{entry.source ?? entry.incomeSource}</Text>}
             {entry.comment && <Text style={styles.meta}>{entry.comment}</Text>}
             {entry.reason && <Text style={styles.meta}>{entry.reason}</Text>}
             {entry.sourceOccurrenceId && <Text style={styles.meta}>{t.carriedSkip}</Text>}
@@ -367,10 +371,11 @@ export function ScheduleScreen({ page, access, accounts, categories, lang, disab
         {active.rules.map((rule) => <Pressable key={rule.ruleId} accessibilityRole="button" style={layout.entry}
           onPress={() => show({ ...page, ruleId: rule.ruleId })} testID={'schedule-rule-' + rule.ruleId}>
           <View style={layout.row}>
-            <Text style={layout.identity}>{categoryName(rule.categoryId) ?? kindName(rule.kind)}</Text>
+            <Text style={layout.identity}>{rule.source ?? rule.incomeSource ?? categoryName(rule.categoryId) ?? kindName(rule.kind)}</Text>
             <Text style={layout.amount}>{formatMoney(rule.amountMinor, rule.currency, lang)}</Text>
           </View>
-          <Text style={styles.meta}>{t[rule.frequency]} · {t[rule.state]}{rule.recoveryHeld && ' · ' + t.recoveryHeld}
+          <Text style={styles.meta}>{(rule.source ?? rule.incomeSource) && (categoryName(rule.categoryId) ?? kindName(rule.kind)) + ' · '}
+            {t[rule.frequency]} · {t[rule.state]}{rule.recoveryHeld && ' · ' + t.recoveryHeld}
             {!accountId && ' · ' + (accounts?.find((item) => item.accountId === rule.accountId)?.name ?? t.unavailable)}</Text>
         </Pressable>)}
       </View>}

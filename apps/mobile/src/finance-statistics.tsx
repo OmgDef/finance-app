@@ -245,14 +245,15 @@ export function StatisticsScreen({ statistics, accounts, categories, lang, onEdi
                 const color = transactionAmountColor(entry.amountMinor);
                 const title = categoryNames.get(entry.categoryId) ?? (isIncome ? f.incomeEntry : f.expenseEntry);
                 const account = accountNames.get(entry.accountId);
+                const description = entry.source ?? entry.incomeSource ?? entry.comment;
                 return <Pressable key={entry.transactionId} accessibilityRole="button" onPress={() => onTransaction(entry)}
                   testID={'statistics-transaction-' + entry.transactionId}
                   style={({ pressed }) => [layout.transaction, rowIndex > 0 && layout.divider, pressed && layout.pressed]}>
                   <View style={layout.identity}>
                     <FinanceIcon name={isIncome ? 'income' : 'expense'} color={color} size={18} />
                     <View style={layout.labels}>
-                      <Text style={styles.title}>{entry.comment || title}</Text>
-                      <Text style={styles.meta}>{[entry.comment && title, account].filter(Boolean).join(' · ') || title}</Text>
+                      <Text style={styles.title}>{description || title}</Text>
+                      <Text style={styles.meta}>{[description && title, account].filter(Boolean).join(' · ') || title}</Text>
                     </View>
                   </View>
                   <Text style={[layout.entryAmount, { color }]}>

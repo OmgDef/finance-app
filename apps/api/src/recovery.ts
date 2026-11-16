@@ -54,7 +54,7 @@ export function prepareRecovery(db: Db, input: Preparation, now = Date.now()) {
     await tx.execute(sql`UPDATE devices SET state = 'revoked', biometric_verifier = NULL WHERE state <> 'revoked' OR biometric_verifier IS NOT NULL`);
     await tx.execute(sql`INSERT INTO audit_events (actor_role, user_id, object_id, event, happened_at, transition)
       SELECT 'operator', id, id, 'account.recovery_pending', ${now}, JSON_OBJECT('from', status, 'to', 'review') FROM users`);
-    await tx.execute(sql`UPDATE users SET active_device_id = NULL, status = 'review'`);
+    await tx.execute(sql`UPDATE users SET status = 'review'`);
     await tx.execute(sql`UPDATE schedule_rules SET recovery_held = TRUE`);
     await tx.execute(sql`DELETE FROM schedule_worker_state WHERE id = 1`);
     await tx.execute(sql`INSERT INTO recovery_state (id, version, snapshot_at, incident_at, prepared_at)

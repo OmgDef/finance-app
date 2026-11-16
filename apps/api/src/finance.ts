@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Body, Params, Result } from '@teta/contracts';
+import type { AccountStatementQuery, Body, Params, Result } from '@teta/contracts';
 import { sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 import { readProfileCalendar } from './profile.ts';
@@ -8,6 +8,7 @@ import type { ActorRole, WithCommandAccess } from './commands.ts';
 import { audit, one, rows } from './db.ts';
 import type { Db, Tx } from './db.ts';
 import { AccessError } from './errors.ts';
+import { normalizeTransactionSource, transactionSourceFields } from './transaction-source.ts';
 import {
   checkScheduleForArchive, readAccountScheduleDates, recordReconciliationSkips, recordScheduleFailure, scheduleSelectionFingerprint,
   settleScheduleDate, validateReconciliationDates,
@@ -24,7 +25,8 @@ type TransactionPreview = Result<'adminPreviewTransactionRevision'>;
 type TransactionHistory = Result<'listTransactionVersions'>;
 type TransactionVersion = TransactionHistory['versions'][number];
 type Movement = { accountId: string; amount: bigint };
-type VersionFields = Pick<TransactionVersion, 'date' | 'categoryId' | 'comment' | 'status' | 'actorRole' | 'reason'>;
+type VersionFields = Pick<TransactionVersion, 'date' | 'categoryId' | 'comment' | 'status' | 'actorRole' | 'reason'> &
+  { transactionSource: string | null };
 type AccountBalance = Result<'getAccountBalance'>;
 type DepositBalance = Extract<AccountBalance, { type: 'deposit' }>;
 type AccountRow = Omit<AccountBalance, 'archived' | 'needsReconciliation'> & {
@@ -78,6 +80,75 @@ export async function getAccountBalance(tx: Tx, userId: string, accountId: strin
   if (!account) throw new AccessError(404, 'NOT_FOUND');
   return formatAccountBalance(account);
 }
+
+export const accountStatementRowLimit = 500;
+
+type StatementEntry = {
+  date: string;
+  kind: 'income' | 'expense' | 'transfer' | 'adjustment';
+  amountMinor: string;
+  category: string | null;
+  description: string | null;
+};
+type StatementAccount = { name: string; currency: AccountBalance['currency']; startDate: string; openingMinor: string };
+
+export async function readAccountStatement(tx: Tx, userId: string, accountId: string, now: number,
+  { fromDate, throughDate, lang }: AccountStatementQuery,
+) {
+  const { today, timeZone } = await readProfileCalendar(tx, userId, now);
+  if (fromDate > throughDate || throughDate > today) throw new AccessError(400, 'INVALID_REQUEST');
+
+  const data = await rows<StatementAccount & (StatementEntry | { kind: null })>(tx, sql`
+    WITH owned_account AS (
+      SELECT id, name, currency, start_date, opening_balance_minor FROM accounts
+      WHERE id = ${accountId} AND user_id = ${userId}
+    ), eligible_account AS (
+      SELECT id FROM owned_account WHERE start_date <= ${fromDate}
+    ), ledger AS (
+      SELECT b.id, b.financial_date AS date, 'adjustment' AS kind, b.delta_minor AS amount,
+        NULL AS category_id, b.explanation AS description
+      FROM eligible_account a JOIN balance_adjustments b ON b.account_id = a.id
+      WHERE b.financial_date <= ${throughDate}
+      UNION ALL
+      SELECT t.id, v.financial_date, t.kind, m.amount_minor, v.category_id, v.comment
+      ${postedMovementsFor(sql`(SELECT id FROM eligible_account)`)} AND v.financial_date <= ${throughDate}
+    ), opening AS (
+      SELECT COALESCE(SUM(amount), 0) AS prior_movements FROM ledger WHERE date < ${fromDate}
+    ), period_entries AS (
+      SELECT * FROM ledger WHERE date >= ${fromDate}
+      ORDER BY date, id, kind LIMIT ${accountStatementRowLimit + 1}
+    )
+    SELECT a.name, a.currency, CAST(a.start_date AS CHAR) AS startDate,
+      CAST(a.opening_balance_minor + o.prior_movements AS CHAR) AS openingMinor,
+      CAST(p.date AS CHAR) AS date, p.kind, CAST(p.amount AS CHAR) AS amountMinor,
+      ${lang === 'ru' ? sql`c.name_ru` : sql`c.name_en`} AS category, p.description
+    FROM owned_account a CROSS JOIN opening o LEFT JOIN period_entries p ON TRUE
+    LEFT JOIN categories c ON c.id = p.category_id ORDER BY p.date, p.id, p.kind`);
+  const account = data[0];
+  if (!account) throw new AccessError(404, 'NOT_FOUND');
+  if (fromDate < account.startDate) throw new AccessError(400, 'INVALID_REQUEST');
+  if (data.length > accountStatementRowLimit) throw new AccessError(422, 'STATEMENT_TOO_LARGE');
+
+  const entries: StatementEntry[] = [];
+  let incoming = 0n;
+  let outgoing = 0n;
+  let adjustments = 0n;
+  for (const row of data) {
+    if (row.kind === null) continue;
+    const { date, kind, amountMinor, category, description } = row;
+    entries.push({ date, kind, amountMinor, category, description });
+    const amount = BigInt(amountMinor);
+    if (kind === 'adjustment') adjustments += amount;
+    else if (amount > 0n) incoming += amount;
+    else outgoing -= amount;
+  }
+  const { name, currency, openingMinor } = account;
+  return { name, currency, fromDate, throughDate, lang, generatedAt: now, timeZone, entries,
+    openingMinor, closingMinor: (BigInt(openingMinor) + incoming - outgoing + adjustments).toString(),
+    incomingMinor: incoming.toString(), outgoingMinor: outgoing.toString(), adjustmentsMinor: adjustments.toString() };
+}
+
+export type AccountStatement = Awaited<ReturnType<typeof readAccountStatement>>;
 
 export async function getAccountBalanceSeries(tx: Tx, userId: string, accountId: string,
   now: number,
@@ -430,18 +501,18 @@ export function createAccount(withAccess: WithCommandAccess, recoveryVersion: st
     }), actorRole);
 }
 
-function postedVersion(input: Revision, actorRole: ActorRole = 'user', reason: string | null = null): VersionFields {
+function postedVersion(input: Revision, transactionSource: string | null, actorRole: ActorRole = 'user', reason: string | null = null): VersionFields {
   return { status: 'posted', date: input.date, comment: input.comment ?? null,
-    categoryId: input.type === 'transfer' ? null : input.categoryId, actorRole, reason };
+    categoryId: input.type === 'transfer' ? null : input.categoryId, transactionSource, actorRole, reason };
 }
 
 async function insertVersion(tx: Tx, transactionId: string, version: number, now: number,
   fields: VersionFields, movements: Movement[],
 ) {
   await tx.execute(sql`INSERT INTO transaction_versions
-    (transaction_id, version, status, financial_date, category_id, comment, created_at, actor_role, reason)
+    (transaction_id, version, status, financial_date, category_id, comment, income_source, created_at, actor_role, reason)
     VALUES (${transactionId}, ${version}, ${fields.status}, ${fields.date}, ${fields.categoryId}, ${fields.comment},
-      ${now}, ${fields.actorRole}, ${fields.reason})`);
+      ${fields.transactionSource}, ${now}, ${fields.actorRole}, ${fields.reason})`);
   for (const { accountId, amount } of movements) {
     await tx.execute(sql`INSERT INTO movements (transaction_id, transaction_version, account_id, amount_minor)
       VALUES (${transactionId}, ${version}, ${accountId}, ${amount.toString()})`);
@@ -449,18 +520,17 @@ async function insertVersion(tx: Tx, transactionId: string, version: number, now
 }
 
 async function postTransaction(tx: Tx, userId: string, now: number, input: Revision, movements: Movement[],
-  source: 'manual' | 'schedule' = 'manual',
+  transactionSource: string | null = null, origin: 'manual' | 'schedule' = 'manual',
 ) {
   const { type } = input;
   const transactionId = randomUUID();
   await tx.execute(sql`INSERT INTO transactions (id, user_id, kind, current_version)
     VALUES (${transactionId}, ${userId}, ${type}, 1)`);
-  // Keep the compatible version DTO. Automatic source is recorded by the occurrence and audit.
-  await insertVersion(tx, transactionId, 1, now, postedVersion(input), movements);
+  await insertVersion(tx, transactionId, 1, now, postedVersion(input, transactionSource), movements);
   for (const { accountId } of movements) {
     await updateAccountForMovement(tx, accountId, input.date);
   }
-  const automatic = source === 'schedule';
+  const automatic = origin === 'schedule';
   await audit(tx, now, automatic ? 'operator' : 'user', `${type}.recorded`, automatic ? null : userId,
     userId, transactionId, { from: '0', to: '1' });
   return { transactionId, transactionVersion: 1 };
@@ -540,14 +610,17 @@ function recordTransfer(withAccess: WithCommandAccess, recoveryVersion: string, 
 export function recordTransaction(withAccess: WithCommandAccess, recoveryVersion: string, input: TransactionInput) {
   if (input.type === 'transfer') return recordTransfer(withAccess, recoveryVersion, input);
   const { type, accountId, date, amountMinor, categoryId, comment = null, idempotencyKey } = input;
+  const transactionSource = normalizeTransactionSource(type, input) ?? null;
+  const parameters = [date, amountMinor, categoryId, comment];
+  if (transactionSource !== null) parameters.push(transactionSource);
   return runCommand<TransactionResult>(withAccess, `${type}.record`, recoveryVersion, idempotencyKey,
-    [accountId], [date, amountMinor, categoryId, comment], async (tx, userId, now, apply) => {
+    [accountId], parameters, async (tx, userId, now, apply) => {
     const accounts = await lockAccounts(tx, userId, [accountId]);
 
     return apply(async () => {
       requireActiveAccounts(accounts.values());
       const movements = await transactionMovements(tx, userId, now, input, accounts);
-      const posted = await postTransaction(tx, userId, now, input, movements);
+      const posted = await postTransaction(tx, userId, now, input, movements, transactionSource);
       return { ...posted, ...await getTransactionAccount(tx, userId, accountId) };
     });
   });
@@ -574,7 +647,7 @@ export function processScheduleDate(db: Db, candidate: ScheduleCandidate, clock 
         categoryId: date.categoryId, comment: date.comment ?? undefined };
       // The calendar established the due instant, even if the profile's date moved back.
       const movements = await transactionMovements(tx, userId, now, input, new Map([[accountId, account]]), date.date);
-      return (await postTransaction(tx, userId, now, input, movements, 'schedule')).transactionId;
+      return (await postTransaction(tx, userId, now, input, movements, date.source ?? null, 'schedule')).transactionId;
     }));
 }
 
@@ -587,11 +660,11 @@ export function recordScheduleDateFailure(db: Db, candidate: ScheduleCandidate, 
 
 export async function listTransactionVersions(tx: Tx, userId: string, transactionId: string): Promise<TransactionHistory> {
   type HistoryRow = Omit<TransactionVersion, 'createdAt' | 'movements'> & {
-    createdAt: number; type: TransactionHistory['type']; transactionVersion: number;
+    createdAt: number; transactionSource: string | null; type: TransactionHistory['type']; transactionVersion: number;
   } & ({ accountId: null; currency: null; amountMinor: null } | TransactionVersion['movements'][number]);
   const history = await rows<HistoryRow>(tx, sql`
     SELECT t.kind AS type, t.current_version AS transactionVersion, v.version, v.status, v.financial_date AS date,
-      v.category_id AS categoryId, v.comment, v.created_at AS createdAt, v.actor_role AS actorRole, v.reason,
+      v.category_id AS categoryId, v.comment, v.income_source AS transactionSource, v.created_at AS createdAt, v.actor_role AS actorRole, v.reason,
       m.account_id AS accountId, a.currency, CAST(m.amount_minor AS CHAR) AS amountMinor
     FROM transactions t JOIN transaction_versions v ON v.transaction_id = t.id
     LEFT JOIN movements m ON m.transaction_id = v.transaction_id AND m.transaction_version = v.version
@@ -602,11 +675,11 @@ export async function listTransactionVersions(tx: Tx, userId: string, transactio
   const { type, transactionVersion } = history[0];
   const versions = new Map<number, TransactionVersion>();
   for (const row of history) {
-    const { version, status, date, categoryId, comment, createdAt, actorRole, reason, accountId, currency, amountMinor } = row;
+    const { version, status, date, categoryId, comment, transactionSource, createdAt, actorRole, reason, accountId, currency, amountMinor } = row;
     let entry = versions.get(version);
     if (!entry) {
       entry = { version, status, date, categoryId, comment, createdAt: new Date(createdAt).toISOString(), actorRole, reason,
-        movements: [] };
+        ...transactionSourceFields(type, transactionSource), movements: [] };
       versions.set(version, entry);
     }
     if (accountId !== null) entry.movements.push({ accountId, currency, amountMinor });
@@ -616,11 +689,12 @@ export async function listTransactionVersions(tx: Tx, userId: string, transactio
 
 async function lockTransactionChange(tx: Tx, userId: string, transactionId: string, revision?: Revision) {
   type CurrentVersion = Pick<TransactionVersion, 'version' | 'status' | 'date' | 'categoryId' | 'comment'> & {
-    type: TransactionHistory['type'];
+    type: TransactionHistory['type']; transactionSource: string | null;
   };
   // The owner is already locked. Read the old account set before acquiring account and transaction locks.
   const current = await one<CurrentVersion>(tx, sql`
-    SELECT t.kind AS type, v.version, v.status, v.financial_date AS date, v.category_id AS categoryId, v.comment
+    SELECT t.kind AS type, v.version, v.status, v.financial_date AS date, v.category_id AS categoryId,
+      v.comment, v.income_source AS transactionSource
     FROM transactions t JOIN transaction_versions v ON v.transaction_id = t.id AND v.version = t.current_version
     WHERE t.id = ${transactionId} AND t.user_id = ${userId}`);
   if (!current) throw new AccessError(404, 'NOT_FOUND');
@@ -650,6 +724,7 @@ async function replacementMovements(tx: Tx, userId: string, now: number, change:
 }
 
 export function previewTransactionChange(withAccess: WithCommandAccess, transactionId: string, revision?: Revision) {
+  if (revision && revision.type !== 'transfer') normalizeTransactionSource(revision.type, revision);
   return retryFinanceWrite(() => withAccess<TransactionPreview>(async (tx, userId, now) => {
     const change = await lockTransactionChange(tx, userId, transactionId, revision);
     const replacement = await replacementMovements(tx, userId, now, change, revision);
@@ -672,6 +747,8 @@ export function changeTransaction(withAccess: WithCommandAccess, recoveryVersion
 ) {
   const { idempotencyKey, expectedTransactionVersion } = input;
   const revision = 'type' in input ? input : undefined;
+  const transactionSource = revision && revision.type !== 'transfer'
+    ? normalizeTransactionSource(revision.type, revision) : undefined;
   const reason = 'reason' in input ? input.reason : null;
   const expected = 'expectedAccounts' in input ? input.expectedAccounts : undefined;
   const expectedAccounts = expected && new Map(expected.map(({ accountId, accountVersion }) => [accountId, accountVersion]));
@@ -687,6 +764,7 @@ export function changeTransaction(withAccess: WithCommandAccess, recoveryVersion
       parameters.push(revision.fromAccountId, revision.toAccountId, revision.fromAmountMinor, revision.toAmountMinor);
     } else {
       parameters.push(revision.accountId, revision.amountMinor, revision.categoryId);
+      if (transactionSource !== undefined) parameters.push(transactionSource);
     }
   }
 
@@ -706,9 +784,10 @@ export function changeTransaction(withAccess: WithCommandAccess, recoveryVersion
         }
         const movements = await replacementMovements(tx, userId, now, change, revision);
         const transactionVersion = change.current.version + 1;
-        const fields: VersionFields = revision ? postedVersion(revision, actorRole, reason) : {
+        const source = transactionSource === undefined ? change.current.transactionSource : transactionSource;
+        const fields: VersionFields = revision ? postedVersion(revision, source, actorRole, reason) : {
           status: 'void', date: change.current.date, categoryId: change.current.categoryId, comment: change.current.comment,
-          actorRole, reason,
+          transactionSource: change.current.transactionSource, actorRole, reason,
         };
         await insertVersion(tx, transactionId, transactionVersion, now, fields, movements);
         await tx.execute(sql`UPDATE transactions SET current_version = ${transactionVersion} WHERE id = ${transactionId}`);

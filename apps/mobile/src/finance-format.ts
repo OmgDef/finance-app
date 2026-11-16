@@ -54,14 +54,14 @@ export function recentStatisticsPeriod(throughDate: string) {
   return { fromDate: addFinancialDays(throughDate, -89), throughDate };
 }
 
-export function formatProfileMoment(milliseconds: number, timeZone: string, lang: Language) {
+export function formatProfileMoment(milliseconds: number, timeZone: string, lang: Language, precision: 'minute' | 'second' = 'minute') {
   try {
     return new Intl.DateTimeFormat(lang === 'ru' ? 'ru-RU' : 'en-GB', {
       timeZone, year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
-      timeZoneName: 'shortOffset',
+      ...(precision === 'second' && { second: '2-digit' }), timeZoneName: 'shortOffset',
     }).format(milliseconds);
   } catch {
-    return new Date(milliseconds).toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
+    return new Date(milliseconds).toISOString().slice(0, precision === 'second' ? 19 : 16).replace('T', ' ') + ' UTC';
   }
 }
 

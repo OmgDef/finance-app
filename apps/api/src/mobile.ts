@@ -10,15 +10,16 @@ import { retryFinanceWrite } from './commands.ts';
 import { minute, networkLimits, normalizeEmail } from './rates.ts';
 
 type Status = 'active' | 'blocked' | 'review';
-interface User { id: string; email: string; status: Status; active_device_id: string | null }
+interface User { id: string; email: string; status: Status }
 interface Device {
   id: string; user_id: string; state: 'active' | 'locked' | 'revoked';
   verifier: string; pin_hash: string; pin_failures: number; biometric_verifier: string | null;
 }
-type UserWithDevice = User & { device_state: Device['state'] | null };
-const usersWithDevices = sql`SELECT u.*, d.state AS device_state FROM users u LEFT JOIN devices d ON d.id = u.active_device_id`;
+type UserWithDevice = User & { device_active: number };
+const usersWithDevices = sql`SELECT u.id, u.email, u.status,
+  EXISTS(SELECT 1 FROM devices d WHERE d.user_id = u.id AND d.state = 'active') AS device_active FROM users u`;
 function userSummary(user: UserWithDevice) {
-  return { id: user.id, email: user.email, status: user.status, deviceActive: user.device_state === 'active' };
+  return { id: user.id, email: user.email, status: user.status, deviceActive: Boolean(user.device_active) };
 }
 const activationInvalid = new AccessError(401, 'ACTIVATION_INVALID');
 
@@ -27,16 +28,26 @@ export function mobileAccess(db: Db, key: Buffer, clock: () => number) {
   const transaction = <T>(fn: (tx: Tx) => Promise<T>) => db.transaction(fn, { isolationLevel: 'read committed' });
   const lockUser = (tx: Tx, id: string) => one<User>(tx, sql`SELECT * FROM users WHERE id = ${id} FOR UPDATE`);
 
+  async function lockActiveUser(tx: Tx, id: string) {
+    const user = await lockUser(tx, id);
+    if (user?.status !== 'active') throw deviceRevoked;
+    return user;
+  }
+
   async function revokeSessions(tx: Tx, deviceId: string) {
     await tx.execute(sql`UPDATE sessions SET revoked = TRUE WHERE device_id = ${deviceId} AND revoked = FALSE`);
   }
 
-  async function revokeInstallation(tx: Tx, user: User, now: number, actor?: string) {
-    if (!user.active_device_id) return;
-    await tx.execute(sql`UPDATE devices SET state = 'revoked', biometric_verifier = NULL WHERE id = ${user.active_device_id}`);
-    await revokeSessions(tx, user.active_device_id);
-    await tx.execute(sql`UPDATE users SET active_device_id = NULL WHERE id = ${user.id}`);
-    await audit(tx, now, actor ? 'admin' : 'user', 'installation.revoked', actor ?? user.id, user.id, user.active_device_id);
+  async function revokeInstallation(tx: Tx, userId: string, deviceId: string, now: number, actor?: string) {
+    await tx.execute(sql`UPDATE devices SET state = 'revoked', biometric_verifier = NULL WHERE id = ${deviceId}`);
+    await revokeSessions(tx, deviceId);
+    await audit(tx, now, actor ? 'admin' : 'user', 'installation.revoked', actor ?? userId, userId, deviceId);
+  }
+
+  async function revokeInstallations(tx: Tx, userId: string, now: number, actor: string) {
+    const devices = await rows<Pick<Device, 'id'>>(tx,
+      sql`SELECT id FROM devices WHERE user_id = ${userId} AND state <> 'revoked' FOR UPDATE`);
+    for (const { id } of devices) await revokeInstallation(tx, userId, id, now, actor);
   }
 
   async function revokeCodes(tx: Tx, userId: string, now: number, actor: string) {
@@ -69,9 +80,8 @@ export function mobileAccess(db: Db, key: Buffer, clock: () => number) {
     return correct ? undefined : pinInvalid;
   }
 
-  async function activeDevice(tx: Tx, user: User | undefined, id: string) {
-    if (!user || user.status !== 'active' || user.active_device_id !== id) throw deviceRevoked;
-    const device = await one<Device>(tx, sql`SELECT * FROM devices WHERE id = ${id} FOR UPDATE`);
+  async function activeDevice(tx: Tx, userId: string, id: string) {
+    const device = await one<Device>(tx, sql`SELECT * FROM devices WHERE id = ${id} AND user_id = ${userId} FOR UPDATE`);
     if (!device || device.state === 'revoked') throw deviceRevoked;
     if (device.state === 'locked') throw pinLocked;
     return device;
@@ -81,15 +91,15 @@ export function mobileAccess(db: Db, key: Buffer, clock: () => number) {
     beforeOwnerLock?: (tx: Tx, userId: string) => Promise<void>) {
     const hash = digest('mobile-session', value);
     const owner = await one<{
-      user_id: string; device_id: string; active_device_id: string | null; status: Status;
+      user_id: string; device_id: string; status: Status;
       state: Device['state']; revoked: number; expires_at: number;
     }>(db, sql`
-      SELECT u.id AS user_id, d.id AS device_id, u.active_device_id, u.status, d.state, s.revoked, s.expires_at
+      SELECT u.id AS user_id, d.id AS device_id, u.status, d.state, s.revoked, s.expires_at
       FROM sessions s JOIN devices d ON d.id = s.device_id JOIN users u ON u.id = d.user_id
       WHERE s.verifier = ${hash}`);
     if (!owner) throw sessionExpired;
     if (beforeOwnerLock) {
-      if (owner.status !== 'active' || owner.active_device_id !== owner.device_id || owner.state === 'revoked') {
+      if (owner.status !== 'active' || owner.state === 'revoked') {
         throw deviceRevoked;
       }
       if (owner.state === 'locked') throw pinLocked;
@@ -97,13 +107,13 @@ export function mobileAccess(db: Db, key: Buffer, clock: () => number) {
     }
     return transaction(async (tx) => {
       await beforeOwnerLock?.(tx, owner.user_id);
-      const user = await lockUser(tx, owner.user_id);
-      const device = await activeDevice(tx, user, owner.device_id);
+      const user = await lockActiveUser(tx, owner.user_id);
+      const device = await activeDevice(tx, user.id, owner.device_id);
       const session = await one<{ expires_at: number; revoked: number }>(tx,
         sql`SELECT expires_at, revoked FROM sessions WHERE verifier = ${hash} FOR UPDATE`);
       const now = clock();
       if (!session || session.revoked || session.expires_at <= now) throw sessionExpired;
-      return fn(tx, user!, device, now);
+      return fn(tx, user, device, now);
     });
   }
 
@@ -125,11 +135,9 @@ export function mobileAccess(db: Db, key: Buffer, clock: () => number) {
           WHERE user_id = ${user.id} AND state = 'issued' AND verifier = ${codeHash}
           AND expires_at > ${now} FOR UPDATE`);
         if (!issued || await one(tx, sql`SELECT id FROM devices WHERE verifier = ${installationHash}`)) throw activationInvalid;
-        await revokeInstallation(tx, user, now);
         const deviceId = randomUUID();
         await tx.execute(sql`INSERT INTO devices (id, user_id, verifier, pin_hash)
           VALUES (${deviceId}, ${user.id}, ${installationHash}, ${pinHash})`);
-        await tx.execute(sql`UPDATE users SET active_device_id = ${deviceId} WHERE id = ${user.id}`);
         await tx.execute(sql`UPDATE activation_codes SET state = 'used' WHERE id = ${issued.id}`);
         await audit(tx, now, 'user', 'activation.used', user.id, user.id, issued.id);
         return newSession(tx, deviceId, now);
@@ -147,11 +155,11 @@ export function mobileAccess(db: Db, key: Buffer, clock: () => number) {
         throw deviceRevoked;
       }
       const outcome = await transaction(async (tx) => {
-        const user = await lockUser(tx, owner.user_id);
-        const device = await activeDevice(tx, user, owner.id);
+        const user = await lockActiveUser(tx, owner.user_id);
+        const device = await activeDevice(tx, user.id, owner.id);
         const now = clock();
         if ('pin' in input) {
-          const error = await checkPin(tx, user!, device, input.pin, now);
+          const error = await checkPin(tx, user, device, input.pin, now);
           if (error) return error;
         } else if (!device.biometric_verifier || !same(device.biometric_verifier, digest('biometric', input.biometricSecret))) {
           throw new AccessError(401, 'BIOMETRICS_INVALID');
@@ -167,8 +175,8 @@ export function mobileAccess(db: Db, key: Buffer, clock: () => number) {
     setTimeZone: (value: string, timeZone: string) => retryFinanceWrite(() =>
       withSession(value, async (tx, user, _device, now) =>
         ({ id: user.id, email: user.email, ...await changeProfileTimeZone(tx, user.id, now, timeZone) }))),
-    logout: (value: string) => withSession(value, async (tx, user, _device, now) => {
-      await revokeInstallation(tx, user, now);
+    logout: (value: string) => withSession(value, async (tx, user, device, now) => {
+      await revokeInstallation(tx, user.id, device.id, now);
     }),
     async setBiometrics(value: string, input?: Body<'enableBiometrics'>) {
       const outcome = await withSession(value, async (tx, user, device, now) => {
@@ -228,14 +236,14 @@ export function mobileAccess(db: Db, key: Buffer, clock: () => number) {
     async revoke(tx: Tx, actor: string, id: string, now: number) {
       const user = await lockUser(tx, id);
       if (!user) throw new AccessError(404, 'NOT_FOUND');
-      await revokeInstallation(tx, user, now, actor);
+      await revokeInstallations(tx, user.id, now, actor);
     },
     async status(tx: Tx, actor: string, id: string, status: Exclude<Status, 'review'>, now: number) {
       const user = await lockUser(tx, id);
       if (!user) throw new AccessError(404, 'NOT_FOUND');
       if (user.status === 'review') throw new AccessError(409, 'ACCOUNT_REVIEW_REQUIRED');
       if (status === 'blocked') {
-        await revokeInstallation(tx, user, now, actor);
+        await revokeInstallations(tx, user.id, now, actor);
         await revokeCodes(tx, id, now, actor);
       }
       if (user.status !== status) {
@@ -248,7 +256,7 @@ export function mobileAccess(db: Db, key: Buffer, clock: () => number) {
       if (!user) throw new AccessError(404, 'NOT_FOUND');
       if (user.status !== 'review') throw new AccessError(409, 'ACCOUNT_REVIEW_CONFLICT');
       const { status, source } = input;
-      await revokeInstallation(tx, user, now, actor);
+      await revokeInstallations(tx, user.id, now, actor);
       await revokeCodes(tx, id, now, actor);
       await tx.execute(sql`UPDATE users SET status = ${status} WHERE id = ${id}`);
       await audit(tx, now, 'admin', 'account.recovery_reviewed', actor, id, id,

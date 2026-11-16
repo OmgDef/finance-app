@@ -130,6 +130,7 @@ export function ScheduleWorkspace({ account, accounts, userId, today, timeZone, 
         <p className="muted">{t.first} · {dateLabel(rule.firstDate, lang)}
           {rule.endDate && ' – ' + dateLabel(rule.endDate, lang)} · {f.version} {rule.ruleVersion}</p>
         <p className="muted">{t.effective} · {utcMoment(rule.effectiveAt, lang)}</p>
+        {(rule.source ?? rule.incomeSource) && <p><strong>{f.transactionSource}</strong> · {rule.source ?? rule.incomeSource}</p>}
         {rule.comment && <p>{rule.comment}</p>}
         {(rule.replaces || rule.replacedBy) && <div className="schedule-links">
           {rule.replaces && <div className="finance-line">
@@ -166,7 +167,7 @@ export function ScheduleWorkspace({ account, accounts, userId, today, timeZone, 
           <span className="history-description">
             <strong>{categoryLabel(entry.categoryId, categories ?? [], lang) ?? f[entry.kind]}</strong>
             <span className="muted">{[dateLabel(entry.firstDate, lang), t[entry.frequency], t[entry.state],
-              entry.recoveryHeld && t.recoveryHeld, entry.comment].filter(Boolean).join(' · ')}</span>
+              entry.recoveryHeld && t.recoveryHeld, entry.source ?? entry.incomeSource, entry.comment].filter(Boolean).join(' · ')}</span>
           </span>
           <span className="money">{ruleAmount(entry, lang)}</span>
         </AdminLink>)}
@@ -221,6 +222,7 @@ export function ScheduleWorkspace({ account, accounts, userId, today, timeZone, 
             {entry.errorCode && <p className="muted">{t.failureCode} · <code>{entry.errorCode}</code>
               {entry.attempts !== undefined && ' · ' + t.attempts + ' ' + entry.attempts}</p>}
             {entry.nextAttemptAt !== undefined && <p className="muted">{t.retryAt} · {utcMoment(entry.nextAttemptAt, lang)}</p>}
+            {(entry.source ?? entry.incomeSource) && <p>{entry.source ?? entry.incomeSource}</p>}
             {entry.comment && <p>{entry.comment}</p>}
             {entry.reason && <p className="muted">{f.reason} · {entry.reason}</p>}
             {entry.sourceOccurrenceId && <p className="muted">{t.carried}</p>}

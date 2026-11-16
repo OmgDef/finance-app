@@ -83,6 +83,8 @@ function RuleForm({ account, rule, mode, today, categories, lang, disabled, prev
   const [firstDate, setFirstDate] = useState(initial);
   const [endDate, setEndDate] = useState(rule?.endDate && rule.endDate >= initial ? rule.endDate : '');
   const [categoryId, setCategory] = useState(rule?.categoryId ?? '');
+  const originalSource = rule?.source ?? rule?.incomeSource;
+  const [sourceText, setSourceText] = useState(originalSource ?? '');
   const [comment, setComment] = useState(rule?.comment ?? '');
   const [reason, setReason] = useState('');
   const [error, setError] = useState('');
@@ -98,7 +100,9 @@ function RuleForm({ account, rule, mode, today, categories, lang, disabled, prev
       setError('INVALID_REQUEST');
       return;
     }
+    const source = sourceText.trim();
     const terms = { kind, frequency, amountMinor, categoryId, firstDate, comment: comment.trim() || null,
+      ...((source || originalSource) && { source: source || null }),
       endDate: frequency === 'once' || !endDate ? null : endDate };
     const decision = preview ? validateDecisions(event.currentTarget, preview, terms) : { decisions: [] };
     if (decision.error) {
@@ -116,6 +120,7 @@ function RuleForm({ account, rule, mode, today, categories, lang, disabled, prev
           <label>{t.kind}<select value={kind} onChange={(event) => {
             setKind(event.target.value as Terms['kind']);
             setCategory('');
+            setSourceText('');
           }}>
             <option value="expense">{f.expense}</option><option value="income">{f.income}</option>
           </select></label>
@@ -132,6 +137,8 @@ function RuleForm({ account, rule, mode, today, categories, lang, disabled, prev
           <option value="" disabled>{f.choose}</option>
           {options.map(({ id, nameEn, nameRu }) => <option key={id} value={id}>{lang === 'ru' ? nameRu : nameEn}</option>)}
         </select></label>
+        <LabeledInput label={f.transactionSource} maxLength={120} value={sourceText}
+          onChange={(event) => setSourceText(event.target.value)} />
         <label className="full-row">{f.comment}<textarea value={comment} maxLength={500} rows={2}
           onChange={(event) => setComment(event.target.value)} /></label>
       </div>
@@ -185,7 +192,8 @@ export function RuleEditor({ action, rule, account, categories, today, onCancel,
       } else if (rule && action !== 'create') {
         const version = { expectedRuleVersion: rule.ruleVersion, reason };
         const body: Change = action === 'edit' && fields ? {
-          ...version, action, amountMinor: fields.amountMinor, categoryId: fields.categoryId, comment: fields.comment, endDate: fields.endDate,
+          ...version, action, amountMinor: fields.amountMinor, categoryId: fields.categoryId, comment: fields.comment,
+          source: fields.source, endDate: fields.endDate,
         } : { ...version, action };
         updated = await api('adminChangeScheduleRule', { ...options, params: { ...params, ruleId: rule.ruleId }, body });
       }

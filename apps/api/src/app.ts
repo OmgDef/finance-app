@@ -1,9 +1,10 @@
 import Fastify, { LogController } from 'fastify';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { routes, errorSchema } from '@teta/contracts';
-import type { AuditQuery, Body, Params, Route, Result, StatisticsQuery } from '@teta/contracts';
+import type { AccountStatementQuery, AuditQuery, Body, Params, Route, Result, StatisticsQuery } from '@teta/contracts';
 import { sql } from 'drizzle-orm';
 import { listAccountHistory } from './account-history.ts';
+import { renderAccountStatement } from './account-statement-pdf.ts';
 import { adminAccess } from './admin.ts';
 import { listAuditEvents } from './audit.ts';
 import { checkCommandStatus, closeCommand } from './commands.ts';
@@ -17,7 +18,7 @@ import { exchangeRates } from './exchange-rates.ts';
 import {
   changeTransaction, createAccount, createAccountCard, deleteAccountCard, getAccountBalance, getAccountBalanceSeries, getCurrencySummary,
   listAccountCards, listAccounts, listBalanceAdjustments, listCategories, listMobileAccounts, listTransactionVersions, previewBalanceAdjustment,
-  previewTransactionChange, reconcileAccountBalance, recordTransaction, renameAccount, setAccountArchived, updateAccountCard,
+  previewTransactionChange, readAccountStatement, reconcileAccountBalance, recordTransaction, renameAccount, setAccountArchived, updateAccountCard,
   updateAccountStartDate,
 } from './finance.ts';
 import { mobileAccess } from './mobile.ts';
@@ -52,6 +53,7 @@ export function buildApp(config: Config, db: Db, clock = Date.now, logger = fals
   });
   const mobile = mobileAccess(db, config.accessKey, clock);
   const loadExchangeRates = exchangeRates(clock);
+  let statementsInFlight = 0;
   const admin = adminAccess(db, config, clock);
   const apiOrigin = new URL(config.apiOrigin);
   const adminOrigin = new URL(config.adminOrigin);
@@ -84,7 +86,7 @@ export function buildApp(config: Config, db: Db, clock = Date.now, logger = fals
 
   function add<K extends Route>(key: K, handler: (
     request: FastifyRequest<{ Body: Body<K>; Params: Params<K> }>, reply: FastifyReply,
-  ) => Promise<Result<K>>) {
+  ) => Promise<Result<K> | FastifyReply>) {
     const route = routes[key];
     const changes = route.method !== 'GET';
     app.route<{ Body: Body<K>; Params: Params<K> }>({
@@ -96,7 +98,7 @@ export function buildApp(config: Config, db: Db, clock = Date.now, logger = fals
         ...((route.method === 'POST' || route.method === 'PUT') && !('optionalBody' in route) && { body: route.body }),
         ...('params' in route && { params: route.params }),
         ...('query' in route && { querystring: route.query }),
-        response: { 200: route.result, '4xx': errorSchema, '5xx': errorSchema },
+        response: { ...(!('contentType' in route) && { 200: route.result }), '4xx': errorSchema, '5xx': errorSchema },
       },
       preValidation: async (request) => {
         if ((route.access === 'admin-step' || (route.access === 'admin' && changes)) &&
@@ -157,6 +159,22 @@ export function buildApp(config: Config, db: Db, clock = Date.now, logger = fals
     updateAccountStartDate(mobileCommandAccess(request), request.params.accountId, request.body));
   add('listAccountHistory', async (request) => mobile.withSession(bearer(request), (tx, user) =>
     listAccountHistory(tx, user.id, request.params.accountId, (request.query as { before?: string }).before)));
+  add('getAccountStatement', async (request, reply) => {
+    const session = bearer(request);
+    if (statementsInFlight >= 2) throw new AccessError(503, 'TEMPORARY_FAILURE', 1);
+    statementsInFlight++;
+    try {
+      const query = request.query as AccountStatementQuery;
+      const statement = await mobile.withSession(session, (tx, user, _device, now) =>
+        readAccountStatement(tx, user.id, request.params.accountId, now, query));
+      const pdf = await renderAccountStatement(statement);
+      return reply.type(routes.getAccountStatement.contentType)
+        .header('Content-Disposition', `attachment; filename="statement-${query.fromDate}-${query.throughDate}.pdf"`)
+        .send(pdf);
+    } finally {
+      statementsInFlight--;
+    }
+  });
   add('listCategories', async (request) => mobile.withSession(bearer(request), listCategories));
   add('getStatistics', async (request) => mobile.withSession(bearer(request), (tx, user, _device, now) =>
     getStatistics(tx, user.id, now, request.query as StatisticsQuery)));

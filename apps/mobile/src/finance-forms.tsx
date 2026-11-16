@@ -118,9 +118,11 @@ export function TransactionForm({ lang, today, disabled, onSubmit, accounts, cat
     ? formatAmount(initial.toAmountMinor, lang) : '', amountInMinorUnits, formatAmount);
   const [date, setDate] = useState<string>();
   const operationDate = date ?? initial?.date ?? today;
+  const originalSource = initial && initial.type !== 'transfer' ? initial.source ?? initial.incomeSource : undefined;
+  const [sourceText, setSourceText] = useState(originalSource ?? '');
   const [comment, setComment] = useState(initial?.comment ?? '');
   const [error, setError] = useState<FinanceCopyKey>();
-  const [expanded, setExpanded] = useState<'account' | 'category' | 'details'>();
+  const [expanded, setExpanded] = useState<'account' | 'category' | 'source' | 'details'>();
   const account = accounts.find((entry) => entry.accountId === accountId);
   const isTransfer = kind === 'transfer';
   const destination = isTransfer ? accounts.find((entry) => entry.accountId === toAccountId) : undefined;
@@ -158,11 +160,15 @@ export function TransactionForm({ lang, today, disabled, onSubmit, accounts, cat
     if (!categoryOptions.some(({ id }) => id === categoryId)) return setError(kind === 'income' ? 'chooseIncomeCategory' : 'chooseCategory');
     if (renderQuickLayout) void KeyboardController.dismiss();
     setError(undefined);
-    onSubmit({ ...fields, type: kind, accountId, amountMinor, categoryId });
+    const source = sourceText.trim();
+    onSubmit({ ...fields, type: kind, accountId, amountMinor, categoryId,
+      ...((source || originalSource) && { source: source || null }) });
   }
 
   const dateField = <FinanceDateField title={t.date} lang={lang} today={today} value={operationDate} onChange={setDate}
     min={earliestDate} disabled={disabled} testID={prefix + '-date'} />;
+  const sourceField = <FinanceField title={t.transactionSource} placeholder={kind === 'expense' ? t.expenseSourceHint : t.incomeSourceHint}
+    value={sourceText} onChangeText={setSourceText} editable={!disabled} maxLength={120} testID={prefix + '-source'} />;
   const commentField = <FinanceField title={t.comment} value={comment} onChangeText={setComment} editable={!disabled} maxLength={500}
     multiline testID={prefix + '-comment'} />;
   const submitButton = <FinanceButton title={submitTitle} onPress={submit} primary disabled={disabled} testID="finance-submit" />;
@@ -208,6 +214,12 @@ export function TransactionForm({ lang, today, disabled, onSubmit, accounts, cat
           </QuickField>
         </View>
         <View style={styles.fieldDivider}>
+          <QuickField title={t.transactionSource} value={sourceText.trim() || undefined} expanded={expanded === 'source'}
+            disabled={disabled} onPress={() => toggle('source')} testID={prefix + '-source-toggle'}>
+            <View style={styles.detailFields}>{sourceField}</View>
+          </QuickField>
+        </View>
+        <View style={styles.fieldDivider}>
           <QuickField title={t.dateAndNote} value={formatFinancialDate(operationDate, lang)} expanded={expanded === 'details'}
             disabled={disabled} onPress={() => toggle('details')} testID={prefix + '-details'}>
             <View style={styles.detailFields}>{dateField}{commentField}</View>
@@ -241,6 +253,7 @@ export function TransactionForm({ lang, today, disabled, onSubmit, accounts, cat
     {!isTransfer && <Choice title={t.category} value={categoryId} onChange={setCategoryId} disabled={disabled}
       options={localizedCategories}
       testID={prefix + '-category'} />}
+    {!isTransfer && sourceField}
     {commentField}
     {error && <FinanceAlert>{t[error]}</FinanceAlert>}
     {submitButton}

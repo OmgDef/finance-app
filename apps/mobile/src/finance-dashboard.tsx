@@ -271,7 +271,8 @@ export function NextPaymentCard({ read, categories, lang, onSchedule }: {
   const t = labels[lang];
   const payment = read.data?.payment;
   const category = categories?.find(({ id }) => id === payment?.categoryId);
-  const title = payment?.comment || (category && (lang === 'ru' ? category.nameRu : category.nameEn)) || financeCopy[lang].expenseEntry;
+  const title = payment?.source || payment?.comment || (category && (lang === 'ru' ? category.nameRu : category.nameEn)) ||
+    financeCopy[lang].expenseEntry;
   return <Card title={t.nextPayment} style={layout.nextPaymentCard} testID="finance-dashboard-next-payment"
     action={<CardLink title={t.schedule} onPress={() => onSchedule()} />}>
     {payment ? <Pressable accessibilityRole="button" onPress={() => onSchedule(payment.ruleId, payment.date)}

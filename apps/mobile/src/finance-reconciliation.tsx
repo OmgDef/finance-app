@@ -49,13 +49,14 @@ function needsRecoveryReview(date: PreviewDate) {
   return date.recoveryHeld || date.errorCode === 'RECOVERY_UNCERTAIN';
 }
 
-function selectedDate({ ruleId, date, ruleVersion, dueAt, kind, amountMinor, categoryId, comment }: PreviewDate): SelectedDate {
-  return { ruleId, date, ruleVersion, dueAt, kind, amountMinor, categoryId, comment, reason: '' };
+function selectedDate({ ruleId, date, ruleVersion, dueAt, kind, amountMinor, categoryId, comment, source, incomeSource }: PreviewDate): SelectedDate {
+  return { ruleId, date, ruleVersion, dueAt, kind, amountMinor, categoryId, comment, ...(source ? { source } : incomeSource ? { incomeSource } : {}), reason: '' };
 }
 
 function sameDate(a: SelectedDate, b: SelectedDate) {
   return a.ruleVersion === b.ruleVersion && a.dueAt === b.dueAt && a.kind === b.kind &&
-    a.amountMinor === b.amountMinor && a.categoryId === b.categoryId && a.comment === b.comment;
+    a.amountMinor === b.amountMinor && a.categoryId === b.categoryId && a.comment === b.comment &&
+    (a.source ?? a.incomeSource) === (b.source ?? b.incomeSource);
 }
 
 export function ReconciliationForm({ account, categories, access, lang, visible, disabled, commandError, onSubmit }: {
@@ -249,6 +250,7 @@ export function ReconciliationForm({ account, categories, access, lang, visible,
             {needsRecoveryReview(entry) && <Text style={styles.meta}>
               {entry.recoveryHeld ? s.recoveryHeld : s.recoveryUncertain}
             </Text>}
+            {(entry.source ?? entry.incomeSource) && <Text style={styles.meta}>{entry.source ?? entry.incomeSource}</Text>}
             {entry.comment && <Text style={styles.meta}>{entry.comment}</Text>}
             <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: !!choice, disabled: !canSelect }}
               disabled={!canSelect} onPress={() => toggle(entry)} testID={'finance-reconcile-date-' + key}

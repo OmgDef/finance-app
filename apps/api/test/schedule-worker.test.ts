@@ -73,8 +73,8 @@ test('Schedule worker with isolated MySQL', {
     const deviceId = randomUUID();
     const session = token();
     const createdAt = Date.parse('2026-01-01T00:00:00Z');
-    await db.execute(sql`INSERT INTO users (id, email, status, active_device_id)
-      VALUES (${userId}, ${userId + '@example.test'}, ${blocked ? 'blocked' : 'active'}, ${deviceId})`);
+    await db.execute(sql`INSERT INTO users (id, email, status)
+      VALUES (${userId}, ${userId + '@example.test'}, ${blocked ? 'blocked' : 'active'})`);
     owners.add(userId);
     await db.execute(sql`INSERT INTO devices (id, user_id, verifier, pin_hash) VALUES (${deviceId}, ${userId}, ${token()}, 'unused')`);
     await db.execute(sql`INSERT INTO sessions (verifier, device_id, expires_at)

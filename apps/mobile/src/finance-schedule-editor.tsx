@@ -16,7 +16,7 @@ type ScheduleRule = Result<'getScheduleRule'>;
 type Create = Body<'createScheduleRule'>;
 type ScheduleDates = Pick<Create, 'firstDate' | 'endDate' | 'frequency'>;
 
-export type EditorValues = Pick<Create, 'amountMinor' | 'categoryId' | 'comment' | 'endDate'>;
+export type EditorValues = Pick<Create, 'amountMinor' | 'categoryId' | 'source' | 'comment' | 'endDate'>;
 type EditorProps = {
   lang: Language;
   accounts: Account[];
@@ -39,6 +39,8 @@ export function ScheduleEditor(props: EditorProps) {
   const [kind, setKind] = useState<Create['kind']>(rule?.kind ?? 'expense');
   const [frequency, setFrequency] = useState<Create['frequency']>(rule?.frequency ?? 'once');
   const [categoryId, setCategory] = useState(rule?.categoryId ?? '');
+  const originalSource = rule?.source ?? rule?.incomeSource;
+  const [sourceText, setSourceText] = useState(originalSource ?? '');
   const [comment, setComment] = useState(rule?.comment ?? '');
   const [error, setError] = useState('');
   const account = accounts.find((item) => item.accountId === accountId);
@@ -64,7 +66,9 @@ export function ScheduleEditor(props: EditorProps) {
     if (props.mode !== 'edit' && firstDate < earliest) return setError('first');
     if (endDate !== null && endDate < firstDate) return setError('end');
     setError('');
-    const fields = { amountMinor: amount.value, categoryId, comment: comment.trim() || null, endDate };
+    const source = sourceText.trim();
+    const fields = { amountMinor: amount.value, categoryId, comment: comment.trim() || null, endDate,
+      ...((source || originalSource) && { source: source || null }) };
     if (props.mode === 'edit') props.onSave(fields);
     else props.onSave({ accountId, kind, frequency, firstDate, ...fields });
   }
@@ -79,7 +83,7 @@ export function ScheduleEditor(props: EditorProps) {
         options={accounts.filter((item) => !item.archived && (!scopedAccountId || item.accountId === scopedAccountId))
           .map((item) => ({ id: item.accountId, label: item.name }))} />}
     {props.mode !== 'edit' && <>
-      <Choice title={t.kind} value={kind} onChange={(next) => { setKind(next); setCategory(''); }} disabled={disabled}
+      <Choice title={t.kind} value={kind} onChange={(next) => { if (next !== kind) { setKind(next); setCategory(''); setSourceText(''); } }} disabled={disabled}
         testID="schedule-kind" options={[{ id: 'expense', label: f.expenseEntry }, { id: 'income', label: f.incomeEntry }]} />
       <Choice title={t.repeat} value={frequency} onChange={setFrequency} disabled={disabled} testID="schedule-frequency"
         options={(['once', 'weekly', 'monthly'] as const).map((id) => ({ id, label: t[id] }))} />
@@ -93,6 +97,8 @@ export function ScheduleEditor(props: EditorProps) {
       options={matching.map(({ id, nameEn, nameRu }) => ({ id, label: lang === 'ru' ? nameRu : nameEn }))} />
     {frequency !== 'once' && <FinanceDateField title={t.last} lang={lang} today={today} value={endDate}
       onChange={setEnd} onClear={() => setEnd(null)} min={firstDate} disabled={disabled} testID="schedule-end" />}
+    <FinanceField title={f.transactionSource} placeholder={kind === 'expense' ? f.expenseSourceHint : f.incomeSourceHint}
+      value={sourceText} onChangeText={setSourceText} editable={!disabled} maxLength={120} testID={'schedule-' + kind + '-source'} />
     <FinanceField title={f.comment} value={comment} onChangeText={setComment} editable={!disabled}
       multiline maxLength={500} testID="schedule-comment" />
     {props.mode === 'replace' && props.renderSkipDecisions({ firstDate, endDate, frequency })}

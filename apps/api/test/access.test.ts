@@ -267,7 +267,7 @@ test('Access API against migrated MySQL', async (t) => {
     }
   });
 
-  await t.test('Activation retry, transaction races, fixed limits, revocation, biometric and PIN lock', async () => {
+  await t.test('Independent device access, one-time activation, fixed limits and account revocation', async () => {
     const email = randomUUID() + '@example.test';
     const created = await send('createUser', { email: ' ' + email.toUpperCase() + ' ' });
     expect(created, 200);
@@ -313,15 +313,23 @@ test('Access API against migrated MySQL', async (t) => {
 
     const newSecret = token();
     const altSecret = token();
-    const replacements = await Promise.all([activate(valid, newSecret, ip), activate(valid, altSecret)]);
-    assert.deepEqual(replacements.map((result) => result.status).sort(), [200, 401]);
-    const winner = replacements[0].status === 200 ? newSecret : altSecret;
+    const attempts = await Promise.all([activate(valid, newSecret, ip), activate(valid, altSecret)]);
+    assert.deepEqual(attempts.map((result) => result.status).sort(), [200, 401]);
+    const winner = attempts[0].status === 200 ? newSecret : altSecret;
     const loser = winner === newSecret ? altSecret : newSecret;
     // Simulate losing the committed activation response by authenticating with the stored installation secret.
     const second = await send('unlock', { installationSecret: winner, pin }, { ip: newIp() });
     expect(second, 200);
     expect(await send('unlock', { installationSecret: loser, pin }, { ip: newIp() }), 403, 'DEVICE_REVOKED');
-    expect(await send('me', undefined, { token: oldSession }), 403, 'DEVICE_REVOKED');
+    const firstProfile = await send('me', undefined, { token: oldSession });
+    const secondProfile = await send('me', undefined, { token: second.data().token });
+    expect(firstProfile, 200);
+    expect(secondProfile, 200);
+    assert.equal(firstProfile.data().id, id);
+    assert.deepEqual(secondProfile.data(), firstProfile.data());
+    const listed = await send('listUsers', undefined, { query: '?' + new URLSearchParams({ search: email }) });
+    expect(listed, 200);
+    assert.deepEqual(listed.data().users, [{ id, email, status: 'active', deviceActive: true }]);
     expect(await activate(valid), 401, 'ACTIVATION_INVALID');
 
     const enrollment = { token: second.data().token };
@@ -329,7 +337,7 @@ test('Access API against migrated MySQL', async (t) => {
     const biometricSecret = token();
     expect(await send('enableBiometrics', { installationSecret: winner, biometricSecret }), 401, 'SESSION_EXPIRED');
     expect(await send('enableBiometrics', { installationSecret: winner, biometricSecret }, enrollment), 200);
-    expect(await send('enableBiometrics', { installationSecret: loser, biometricSecret: token() }, enrollment), 401, 'BIOMETRICS_INVALID');
+    expect(await send('enableBiometrics', { installationSecret: firstSecret, biometricSecret: token() }, enrollment), 401, 'BIOMETRICS_INVALID');
     const bio = await send('unlock', { installationSecret: winner, biometricSecret });
     expect(bio, 200);
     expect(await send('me', undefined, { token: second.data().token }), 401, 'SESSION_EXPIRED');
@@ -346,6 +354,10 @@ test('Access API against migrated MySQL', async (t) => {
     }
     expect(await send('unlock', { installationSecret: winner, biometricSecret }), 403, 'PIN_LOCKED');
     expect(await send('me', undefined, { token: bio.data().token }), 403, 'PIN_LOCKED');
+    expect(await send('me', undefined, { token: oldSession }), 200);
+    const firstUnlocked = await send('unlock', { installationSecret: firstSecret, pin });
+    expect(firstUnlocked, 200);
+    const firstToken = firstUnlocked.data().token;
 
     now += 30_000;
     await adminLogin();
@@ -353,10 +365,25 @@ test('Access API against migrated MySQL', async (t) => {
     expect(logoutSession, 200);
     expect(await send('logout', {}, { token: logoutSession.data().token }), 200);
     expect(await send('me', undefined, { token: logoutSession.data().token }), 403, 'DEVICE_REVOKED');
+    expect(await send('me', undefined, { token: firstToken }), 200);
     const active = await activate(await issue());
     expect(active, 200);
     expect(await send('revoke', { userId: id }), 200);
     expect(await send('me', undefined, { token: active.data().token }), 403, 'DEVICE_REVOKED');
+    expect(await send('me', undefined, { token: firstToken }), 403, 'DEVICE_REVOKED');
+    expect(await send('unlock', { installationSecret: winner, pin }), 403, 'DEVICE_REVOKED');
+    assert.equal((await send('adminGetUser', undefined, { params: userParams })).data().deviceActive, false);
+
+    const beforeBlock = [await activate(await issue()), await activate(await issue())];
+    beforeBlock.forEach((result) => expect(result, 200));
+    const validBeforeBlock = await issue();
+    expect(await send('setStatus', { userId: id, status: 'blocked' }), 200);
+    expect(await send('issue', { userId: id }), 409, 'ACCOUNT_UNAVAILABLE');
+    expect(await send('setStatus', { userId: id, status: 'active' }), 200);
+    for (const session of beforeBlock) {
+      expect(await send('me', undefined, { token: session.data().token }), 403, 'DEVICE_REVOKED');
+    }
+    expect(await activate(validBeforeBlock), 401, 'ACTIVATION_INVALID');
     const expired = await issue();
     now += 24 * 60 * minute;
     expect(await activate(expired), 401, 'ACTIVATION_INVALID');

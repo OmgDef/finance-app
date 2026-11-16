@@ -68,6 +68,7 @@ export function TransactionEditor({ userId, transactionId, accounts, categories,
             .format(new Date(version.createdAt))} UTC</span>
         </div>
         <p className="muted">{[dateLabel(version.date, lang), categoryLabel(version.categoryId, categories, lang), t[version.actorRole]].filter(Boolean).join(' · ')}</p>
+        {(version.source ?? version.incomeSource) && <p><strong>{t.transactionSource}</strong> · {version.source ?? version.incomeSource}</p>}
         {version.comment && <p>{version.comment}</p>}
         {version.reason && <p><strong>{t.reason}</strong> · {version.reason}</p>}
         {version.movements.map(({ accountId, currency, amountMinor }) => <div className="finance-line" key={accountId}>
@@ -91,6 +92,8 @@ function TransactionForm({ mode, current, type, params, accounts, categories, se
   const [toAccountId, setToAccount] = useState(credit?.accountId ?? '');
   const [date, setDate] = useState(current.date);
   const [categoryId, setCategory] = useState(current.categoryId ?? '');
+  const originalSource = current.source ?? current.incomeSource;
+  const [sourceText, setSourceText] = useState(originalSource ?? '');
   const [comment, setComment] = useState(current.comment ?? '');
   const [reason, setReason] = useState('');
   const amount = useAmount(type === 'income' ? credit?.amountMinor : debit?.amountMinor.slice(1), lang);
@@ -152,7 +155,11 @@ function TransactionForm({ mode, current, type, params, accounts, categories, se
       const toAmountMinor = received.value;
       if (!toAmountMinor || BigInt(toAmountMinor) <= 0n) { setError('INVALID_REQUEST'); return; }
       replacement = { ...base, type, fromAccountId: accountId, toAccountId, fromAmountMinor: amountMinor, toAmountMinor };
-    } else replacement = { ...base, type, accountId, categoryId, amountMinor };
+    } else {
+      const source = sourceText.trim();
+      replacement = { ...base, type, accountId, categoryId, amountMinor,
+        ...((source || originalSource) && { source: source || null }) };
+    }
     void loadPreview({ replacement, reason: reason.trim() }, false);
   }
 
@@ -198,6 +205,8 @@ function TransactionForm({ mode, current, type, params, accounts, categories, se
             {categories.filter((item) => item.type === type).map(({ id, nameRu, nameEn }) =>
               <option value={id} key={id}>{lang === 'ru' ? nameRu : nameEn}</option>)}
           </select></label>}
+          {type !== 'transfer' && <LabeledInput label={t.transactionSource} maxLength={120} value={sourceText}
+            onChange={(event) => setSourceText(event.target.value)} />}
           <label className="full-row">{t.comment}<textarea maxLength={500} rows={2} value={comment}
             onChange={(event) => setComment(event.target.value)} /></label>
         </div>}

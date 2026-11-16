@@ -21,7 +21,7 @@ type MonthSection = { key: string; title: string; data: Entry[] };
 
 export function AccountOverview({ account, depositTerms, lang, categories, month, balanceSeries, balanceSeriesError,
   cards, cardsError, monthlyActivity, totalsError, history, historyBusy, historyError, accountError, refreshing, created,
-  onRefresh, onMore, onTransaction, onOpenCard, onManageCards, onReloadCards }: {
+  onRefresh, onMore, onTransaction, onOpenCard, onManageCards, onReloadCards, statementTitle, onStatement }: {
   account?: Account;
   depositTerms: string;
   lang: Language;
@@ -45,6 +45,8 @@ export function AccountOverview({ account, depositTerms, lang, categories, month
   onOpenCard: (id: string) => void;
   onManageCards: () => void;
   onReloadCards: () => void;
+  statementTitle: string;
+  onStatement: () => void;
 }) {
   const t = financeCopy[lang];
   const s = statisticsCopy[lang];
@@ -99,6 +101,7 @@ export function AccountOverview({ account, depositTerms, lang, categories, month
           {account.needsReconciliation && <FinanceAlert style={layout.balanceAlert}>{t.needsReconciliation}</FinanceAlert>}
           {created && <Text style={layout.balanceMeta} testID="finance-receipt" accessibilityLiveRegion="polite">{t.accountCreated}</Text>}
         </View>
+        <FinanceButton title={statementTitle} testID="finance-detail-statement" onPress={onStatement} />
         {(!!cards?.length || cardsError) && <View style={layout.cardSection}>
           <View style={layout.cardHeader}>
             <Text accessibilityRole="header" style={styles.section} testID="finance-detail-cards">{t.cards}</Text>
@@ -166,13 +169,16 @@ export function AccountOverview({ account, depositTerms, lang, categories, month
       const isTransaction = 'status' in item;
       const isVoided = isTransaction && item.status === 'void';
       const category = 'categoryId' in item && item.categoryId ? categoryNames.get(item.categoryId) : undefined;
+      const source = isTransaction ? item.source ?? item.incomeSource : undefined;
+      const title = category ?? titles[item.type];
       const details = 'comment' in item ? item.comment : 'explanation' in item ? item.explanation : null;
       const isFirst = index === 0;
       const isLast = index === section.data.length - 1;
       const date = index === 0 || section.data[index - 1].date !== item.date ? formatFinancialDate(item.date, lang) : undefined;
       const row = <View style={layout.row}>
         <View style={layout.identity}>
-          <Text style={styles.title}>{category ?? titles[item.type]}</Text>
+          <Text style={styles.title}>{source ?? title}</Text>
+          {source && <Text style={styles.meta}>{title}</Text>}
           {!!details && <Text style={styles.meta}>{details}</Text>}
           {isVoided && <Text style={styles.meta}>{t.void}</Text>}
           {'actorRole' in item && item.actorRole === 'admin' && <Text style={styles.meta}>{t.changedByAdmin}</Text>}

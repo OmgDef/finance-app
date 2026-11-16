@@ -60,12 +60,26 @@ const createAccountInput = T.Union([
 ]);
 const accountStartDateFields = { startDate: financialDate, expectedAccountVersion: ledgerVersion };
 const accountParams = T.Object({ accountId: id });
+const accountStatementQuery = T.Object({ fromDate: financialDate, throughDate: financialDate, lang: language },
+  { additionalProperties: false });
 const adminAccountParams = T.Object({ userId: id, accountId: id });
+const transactionSource = T.String({ maxLength: 120, pattern: '\\S', description: 'Payer, merchant, or recipient.' });
+const legacyIncomeSource = T.String({ maxLength: 120, pattern: '\\S', deprecated: true, description: 'Use source for new clients.' });
+const sourceInputFields = {
+  source: T.Optional(T.Union([transactionSource, T.Null()], {
+    description: 'Omit to keep the source on an update, or send null to clear it.',
+  })),
+  incomeSource: T.Optional(T.Union([legacyIncomeSource, T.Null()], {
+    description: 'Legacy income-only field. Use source or incomeSource in a request.',
+  })),
+};
+const sourceReadFields = { source: T.Optional(transactionSource), incomeSource: T.Optional(legacyIncomeSource) };
 const scheduleDateFields = {
   ruleId: id, date: financialDate, ruleVersion: ledgerVersion,
   dueAt: T.Integer({ description: 'UTC Unix time in milliseconds' }),
   kind: T.Union([T.Literal('expense'), T.Literal('income')]),
   amountMinor: signedMinor, categoryId: T.String(), comment: T.Union([T.String(), T.Null()]),
+  ...sourceReadFields,
 };
 const skipReason = T.String({ maxLength: 500, pattern: '\\S' });
 export const scheduleFailureCode = T.Union([
@@ -174,7 +188,7 @@ const transactionAccount = T.Object(transactionAccountFields);
 const incomeExpenseType = T.Union([T.Literal('expense'), T.Literal('income')]);
 const categoryIdPattern = '^[a-z][a-z0-9_-]{0,63}$';
 const singleAccountTransaction = {
-  ...transactionFields, type: incomeExpenseType, accountId: id,
+  ...transactionFields, type: incomeExpenseType, accountId: id, ...sourceInputFields,
   amountMinor: positiveAmountMinor,
   categoryId: T.String({
     pattern: categoryIdPattern,
@@ -216,7 +230,7 @@ const accountHistory = T.Object({
     T.Object({ ...accountHistoryEntryFields,
       type: T.Union([T.Literal('expense'), T.Literal('income'), T.Literal('transfer')]),
       transactionVersion: ledgerVersion, status: transactionStatus, actorRole: financialActor,
-      categoryId: T.Union([T.String(), T.Null()]), comment: T.Union([T.String(), T.Null()]),
+      categoryId: T.Union([T.String(), T.Null()]), comment: T.Union([T.String(), T.Null()]), ...sourceReadFields,
     }, { additionalProperties: false }),
   ])),
   next: T.Union([accountHistoryCursor, T.Null()]),
@@ -244,6 +258,7 @@ const statistics = T.Object({
   entries: T.Array(T.Object({
     transactionId: id, transactionVersion: ledgerVersion, date: financialDate, type: incomeExpenseType,
     accountId: id, currency, categoryId: T.String(), comment: T.Union([T.String(), T.Null()]), amountMinor: signedMinor,
+    ...sourceReadFields,
   })),
   next: T.Union([accountHistoryCursor, T.Null()]),
 });
@@ -271,6 +286,7 @@ const transactionHistory = T.Object({
   versions: T.Array(T.Object({
     version: expectedTransactionVersion, status: transactionStatus, date: financialDate,
     categoryId: T.Union([T.String(), T.Null()]), comment: T.Union([T.String(), T.Null()]), createdAt: expiry,
+    ...sourceReadFields,
     actorRole: financialActor, reason: T.Union([T.String(), T.Null()]),
     movements: T.Array(T.Object({ accountId: id, currency, amountMinor: balanceMinor })),
   })),
@@ -293,7 +309,8 @@ const adminSession = T.Object({ id, login: email, csrf: secret, recoveryVersion 
 const ok = T.Object({ ok: T.Literal(true) });
 export const accountStatus = T.Union([T.Literal('active'), T.Literal('blocked'), T.Literal('review')]);
 const confirmedAccountStatus = T.Union([T.Literal('active'), T.Literal('blocked')]);
-const user = T.Object({ id, email, status: accountStatus, deviceActive: T.Boolean() });
+const user = T.Object({ id, email, status: accountStatus,
+  deviceActive: T.Boolean({ description: 'True when the account has at least one active installation.' }) });
 const empty = T.Object({}, { additionalProperties: false });
 
 const scheduleRuleParams = T.Object({ ruleId: id });
@@ -354,11 +371,11 @@ const ruleFields = {
   accountId: id, kind: scheduleDateFields.kind, frequency: ruleFrequency, firstDate: financialDate,
   amountMinor: positiveAmountMinor, categoryId: singleAccountTransaction.categoryId,
 };
-const ruleCreateFields = { ...ruleFields, comment: T.Optional(ruleComment), endDate: T.Optional(ruleEndDate) };
+const ruleCreateFields = { ...ruleFields, comment: T.Optional(ruleComment), ...sourceInputFields, endDate: T.Optional(ruleEndDate) };
 const adminReason = T.String({ maxLength: 500, pattern: '\\S' });
 const ruleEditFields = {
   amountMinor: T.Optional(ruleFields.amountMinor), categoryId: T.Optional(ruleFields.categoryId),
-  comment: T.Optional(ruleComment), endDate: T.Optional(ruleEndDate),
+  comment: T.Optional(ruleComment), ...sourceInputFields, endDate: T.Optional(ruleEndDate),
 };
 const ruleVersionFields = { expectedRuleVersion: ledgerVersion };
 const ruleEdit = T.Object({ ...ruleVersionFields, action: T.Literal('edit'), ...ruleEditFields }, { additionalProperties: false });
@@ -376,7 +393,7 @@ const scheduleTransition = {
 };
 const linkedScheduleRule = T.Object({ ruleId: id, ...scheduleTransition });
 const scheduleRule = T.Object({
-  ...ruleFields, ruleId: id, currency, comment: ruleComment, endDate: ruleEndDate, state: ruleState,
+  ...ruleFields, ruleId: id, currency, comment: ruleComment, ...sourceReadFields, endDate: ruleEndDate, state: ruleState,
   ruleVersion: ledgerVersion, effectiveAt: T.Integer({ description: 'UTC Unix time in milliseconds for the latest accepted version.' }),
   replaces: T.Optional(linkedScheduleRule), replacedBy: T.Optional(linkedScheduleRule),
   recoveryHeld: T.Optional(T.Literal(true, { description: 'Automatic processing is held until the restored rule is verified.' })),
@@ -497,10 +514,13 @@ export const routes = {
     query: T.Object({ lang: T.Optional(language) }),
     description: 'Does not require an installation or session. Unconfigured contacts are null. Includes complete, published FAQ entries ordered by position and stable ID. Language defaults to English.',
   },
-  activate: route(endpoints.activate, 'public', 'Activate a new installation with a one-time code', T.Object({
-    email, code, pin, installationSecret: secret,
-  }), mobileSession),
-  unlock: route(endpoints.unlock, 'public', 'Replace the session using the installation secret and a PIN or biometrics',
+  activate: {
+    ...route(endpoints.activate, 'public', 'Activate a new installation with a one-time code', T.Object({
+      email, code, pin, installationSecret: secret,
+    }), mobileSession),
+    description: 'Each installation requires its own one-time code and PIN. Existing installations and their sessions stay active.',
+  },
+  unlock: route(endpoints.unlock, 'public', 'Replace this installation’s session using its secret and a PIN or biometrics',
     T.Union([
       T.Object({ installationSecret: secret, pin }, { additionalProperties: false }),
       T.Object({ installationSecret: secret, biometricSecret: secret }, { additionalProperties: false }),
@@ -515,7 +535,7 @@ export const routes = {
       503: scheduleRuleWriteFailures[503],
     },
   },
-  logout: route(endpoints.logout, 'mobile', 'Revoke the installation and its sessions', empty, ok),
+  logout: route(endpoints.logout, 'mobile', 'Revoke the current installation and its sessions', empty, ok),
   enableBiometrics: {
     ...route(endpoints.enableBiometrics, 'mobile', 'Register a locally protected biometric secret', T.Union([
       T.Object({ installationSecret: secret, biometricSecret: secret }, { additionalProperties: false }),
@@ -579,6 +599,18 @@ export const routes = {
     query: T.Object({ before: T.Optional(accountHistoryCursor) }, { additionalProperties: false }),
     description: 'Returns up to 50 entries ordered by financial date and ID, newest first. Pass next as before for the following page. Reload from the first page after changing a date. Includes the opening balance, reconciliations, and current transaction versions. A void entry shows its last posted amount and has no effect on balances. Archived account history remains readable.',
     failures: { ...accountNotFound, 400: 'INVALID_REQUEST for a malformed cursor or an invalid date in the cursor.' },
+  },
+  getAccountStatement: {
+    ...route(endpoints.getAccountStatement, 'mobile', 'Download an account statement as a PDF', empty,
+      T.String({ format: 'binary' })),
+    contentType: 'application/pdf', params: accountParams, query: accountStatementQuery,
+    description: 'Includes the current posted movements and balance adjustments of the owned account across both inclusive dates. Dates must be between the opening date and today in the profile time zone. Archived accounts are supported.',
+    failures: {
+      ...accountNotFound,
+      400: 'INVALID_REQUEST for an invalid date or range.',
+      422: 'STATEMENT_TOO_LARGE when the range exceeds the statement row limit. Request a shorter range.',
+      503: 'TEMPORARY_FAILURE when the server is at capacity for statement requests. Retry after the indicated delay.',
+    },
   },
   listCategories: {
     ...route(endpoints.listCategories, 'mobile', 'List expense and income categories', empty,
@@ -796,7 +828,7 @@ export const routes = {
   createUser: route(endpoints.createUser, 'admin', 'Create an active account', T.Object({ email }), user),
   issue: route(endpoints.issue, 'admin', 'Replace unused codes and return the new code once',
     T.Object({ userId: id }), T.Object({ code, expiresAt: expiry })),
-  revoke: route(endpoints.revoke, 'admin', 'Revoke the active installation and its sessions', T.Object({ userId: id }), ok),
+  revoke: route(endpoints.revoke, 'admin', 'Revoke all installations and their sessions for the account', T.Object({ userId: id }), ok),
   setStatus: {
     ...route(endpoints.setStatus, 'admin', 'Block or unblock an account after any recovery review',
       T.Object({ userId: id, status: confirmedAccountStatus }), ok),
@@ -807,7 +839,7 @@ export const routes = {
       T.Object({ status: confirmedAccountStatus, source: recoveryEvidence,
         reason: T.String({ maxLength: 500, pattern: '\\S' }) }, { additionalProperties: false }), user),
     params: adminUserParams,
-    description: 'Only an account awaiting recovery review is eligible. Record post-snapshot records or explicit confirmation by the service owner. The decision revokes any restored installation and issued codes. An account with insufficient evidence stays in review.',
+    description: 'Only an account awaiting recovery review is eligible. Record post-snapshot records or explicit confirmation by the service owner. The decision revokes all restored installations and issued codes. An account with insufficient evidence stays in review.',
     failures: { 400: 'INVALID_REQUEST for missing or invalid evidence or reason.', 404: 'NOT_FOUND for an unknown account.',
       409: 'ACCOUNT_REVIEW_CONFLICT when the account no longer awaits review.' },
   },
@@ -968,6 +1000,7 @@ type RouteParams = { [K in Route]: (typeof routes)[K] extends { params: infer P 
 export type Params<K extends Route> = RouteParams[K];
 export type Result<K extends Route> = Static<(typeof routes)[K]['result']>;
 export type StatisticsQuery = Static<typeof statisticsQuery>;
+export type AccountStatementQuery = Static<typeof accountStatementQuery>;
 export type AuditQuery = Static<typeof auditQuery>;
 export type RecoveryEvidence = Static<typeof recoveryEvidence>;
 export type Language = Static<typeof language>;
@@ -979,6 +1012,7 @@ export const errorCodes = [
   'IDEMPOTENCY_CONFLICT', 'COMMAND_CLOSED', 'COMMAND_REQUIRES_REVIEW', 'TEMPORARY_FAILURE',
   'VERSION_CONFLICT', 'TRANSACTION_VOID', 'ACCOUNT_BALANCE_NOT_ZERO', 'ACCOUNT_START_DATE_CONFLICT', 'SCHEDULE_DATE_CONFLICT', 'SCHEDULE_DATES_PENDING',
   'SCHEDULE_FUTURE_DATES', 'SCHEDULE_RULE_STATE_CONFLICT', 'SCHEDULE_REPLACEMENT_CONFLICT', 'TIME_ZONE_CONFLICT',
+  'STATEMENT_TOO_LARGE',
 ] as const;
 export type ErrorCode = typeof errorCodes[number];
 export const errorSchema = T.Object({

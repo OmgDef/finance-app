@@ -22,7 +22,7 @@ export const copy = {
     saveTimeZone: 'Save time zone', usePhoneTimeZone: 'Use the phone’s time zone', keepUtc: 'Use UTC',
     timeZoneSuggestion: 'Choose a time zone for scheduled payments and financial dates.',
     timeZoneSaved: 'Time zone saved.', invalidTimeZone: 'Enter an IANA time zone such as Europe/Moscow or UTC.',
-    offlineLogout: 'Local access cleared. The server revocation is unconfirmed. Contact the administrator or activate another phone.',
+    offlineLogout: 'You signed out on this device. The server could not confirm revocation. Contact your administrator to revoke access.',
     errors: {
       PIN_MISMATCH: 'Enter the same four-digit PIN twice.', PIN_INVALID: 'Incorrect PIN.',
       PIN_LOCKED: 'Access is locked. Ask your administrator for a new code.',
@@ -60,7 +60,7 @@ export const copy = {
     saveTimeZone: 'Сохранить часовой пояс', usePhoneTimeZone: 'Использовать часовой пояс телефона', keepUtc: 'Использовать UTC',
     timeZoneSuggestion: 'Выберите часовой пояс для графика и дат финансового учёта.',
     timeZoneSaved: 'Часовой пояс сохранён.', invalidTimeZone: 'Введите часовой пояс IANA, например Europe/Moscow или UTC.',
-    offlineLogout: 'Локальный доступ очищен. Серверный отзыв не подтверждён. Обратитесь к администратору или активируйте другой телефон.',
+    offlineLogout: 'Вы вышли на этом устройстве. Сервер не подтвердил отзыв доступа. Чтобы отозвать доступ, обратитесь к администратору.',
     errors: {
       PIN_MISMATCH: 'Дважды введите один и тот же четырёхзначный PIN.', PIN_INVALID: 'Неверный PIN.',
       PIN_LOCKED: 'Доступ заблокирован. Запросите новый код у администратора.',

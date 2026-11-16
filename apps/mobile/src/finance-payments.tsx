@@ -124,9 +124,12 @@ export function PaymentsScreen({ access, lang, accountCount, categories, blocked
           const title = category ? (lang === 'ru' ? category.nameRu : category.nameEn)
             : entry.kind === 'expense' ? t.expenseEntry : t.incomeEntry;
           const status = entry.recoveryHeld ? s.recoveryHeld : s[entry.status];
+          const source = entry.source ?? entry.incomeSource;
+          const primary = source ?? title;
+          const secondary = source ? `${title} · ${status}` : status;
           const amount = formatMoney(entry.kind === 'expense' ? '-' + entry.amountMinor : entry.amountMinor, entry.currency, lang, true);
           return <Pressable key={entry.ruleId + ':' + entry.date} accessibilityRole="button"
-            accessibilityLabel={[formatFinancialDate(entry.date, lang), title, status, amount].join(', ')}
+            accessibilityLabel={[formatFinancialDate(entry.date, lang), primary, secondary, amount].join(', ')}
             onPress={() => onSchedule(entry.ruleId)}
             style={({ pressed }) => [layout.entry, index > 0 && layout.divider, pressed && layout.pressed]}>
             <View style={layout.entryIdentity}>
@@ -135,8 +138,8 @@ export function PaymentsScreen({ access, lang, accountCount, categories, blocked
                 <Text style={layout.month}>{month.format(new Date(entry.date + 'T00:00:00Z'))}</Text>
               </View>
               <View style={layout.labels}>
-                <Text style={styles.title}>{title}</Text>
-                <Text style={entry.status === 'needs_intervention' ? styles.alert : styles.meta}>{status}</Text>
+                <Text style={styles.title}>{primary}</Text>
+                <Text style={entry.status === 'needs_intervention' ? styles.alert : styles.meta}>{secondary}</Text>
               </View>
             </View>
             <Text style={[layout.amount, entry.kind === 'income' && layout.income]}>{amount}</Text>
