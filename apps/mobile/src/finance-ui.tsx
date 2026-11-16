@@ -42,8 +42,8 @@ export function FinanceScrollView({ children, nativeTab, ...props }: ComponentPr
   </KeyboardAwareScrollView>;
 }
 
-export function FinanceMark() {
-  return <Image source={require('../assets/theta.png')} style={styles.brandMark} accessible={false}
+export function FinanceMark({ size = 29 }: { size?: number }) {
+  return <Image source={require('../assets/theta.png')} style={[styles.brandMark, { width: size, height: size }]} accessible={false}
     importantForAccessibility="no" />;
 }
 
@@ -115,7 +115,7 @@ export const styles = StyleSheet.create({
   page: { width: '100%', maxWidth: 540, alignSelf: 'center', paddingHorizontal: 18, paddingTop: 18, paddingBottom: 24, gap: 18 },
   brand: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1 },
   // The visible outline in theta.png is 234 × 250 within a square canvas.
-  brandMark: { width: 29, height: 29, transform: [{ scaleY: 234 / 250 }] },
+  brandMark: { transform: [{ scaleY: 234 / 250 }] },
   brandTitle: { color: palette.ink, fontSize: 15, fontWeight: '700', flexShrink: 1 },
   heading: { color: palette.ink, fontSize: 27, fontWeight: '700' },
   section: { color: palette.ink, fontSize: 19, fontWeight: '700' },

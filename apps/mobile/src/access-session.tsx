@@ -9,6 +9,7 @@ import { getCalendars, getLocales } from 'expo-localization';
 import * as Store from 'expo-secure-store';
 import * as Capture from 'expo-screen-capture';
 import type { Language, Result } from '@teta/contracts';
+import { AccessCheckScreen } from './access-check-screen';
 import { ApiError, request } from './api';
 import { copy } from './copy';
 import type { FinanceAccess } from './finance-commands';
@@ -624,13 +625,20 @@ export function AccessProvider({ children }: { children: ReactNode }) {
   // The keyboard controller scrolls to the caret. Leave room for the rest of the input below it.
   const keyboardBottomOffset = showsKeyboardToolbar ? 88 : 28;
   const canReturnToPin = !!installation && !installationBlocked;
+  const showsAccessCheck = mode === 'loading' || mode === 'checking';
+  const accessCheckFailed = mode === 'checking' && checkingFailed;
   const signedOut = showsUnlockScreen ? <UnlockScreen key={mode} lang={lang} busy={busy} message={notice ? noticeMessage : ''}
     languageError={languageError} onLanguage={switchLanguage} verifyingActivation={mode === 'verify'}
     canReturnToPin={mode === 'verify' && canReturnToPin}
     canUseBiometrics={mode === 'unlock' && enabled && !invalidatedBiometrics.current}
     onPin={(pin) => run(() => unlock({ pin }))} onBiometrics={() => void run(() => unlock({ biometrics: true }))}
     onRecovery={() => showAccessForm(installation ? 'recovery' : 'activate')}
-    onReturnToPin={() => showAccessForm('unlock')} /> : <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
+    onReturnToPin={() => showAccessForm('unlock')} /> : showsAccessCheck ? <AccessCheckScreen
+    lang={lang} languageError={languageError} onLanguage={switchLanguage} supportOpen={supportOpen}
+    onToggleSupport={() => setSupportOpen(!supportOpen)} error={accessCheckFailed ? noticeMessage : undefined} busy={busy}
+    onRetry={accessCheckFailed && session.current ? () => void checkAccess() : undefined}
+    onSignOut={accessCheckFailed && session.current ? () => void run(logout) : undefined} />
+    : <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
     <KeyboardAwareScrollView bottomOffset={keyboardBottomOffset}
       extraKeyboardSpace={showsKeyboardToolbar ? 42 : 0} disableScrollOnKeyboardHide
       contentInsetAdjustmentBehavior="never"
@@ -655,11 +663,6 @@ export function AccessProvider({ children }: { children: ReactNode }) {
         {action(t.activate, () => void run(activate), true)}
         {pendingInstallation && action(t.verifyActivationPin, () => showAccessForm('verify'))}
         {canReturnToPin && action(t.usePin, () => showAccessForm('unlock'))}
-      </>}
-      {(mode === 'loading' || mode === 'checking') && <Text style={styles.heading}>{t.checking}</Text>}
-      {mode === 'checking' && checkingFailed && session.current && <>
-        {action(t.retry, () => void checkAccess(), true)}
-        {action(t.signOut, () => void run(logout))}
       </>}
       {mode === 'storage' && action(t.retry, () => void initialize(), true)}
       {status}
