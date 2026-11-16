@@ -5,7 +5,8 @@ import { formatMoney } from '@teta/contracts/money';
 import { api, errorCode } from './api';
 import type { AdminCommands } from './commands';
 import { financeWords } from './finance-copy';
-import { categoryLabel, dateLabel, EditorHeading, Failure, firstFinancialDate, lastFinancialDate, LabeledInput, shiftDate, useQuery } from './finance-ui';
+import { categoryLabel, dateLabel, EditorHeading, Failure, firstFinancialDate, lastFinancialDate, LabeledInput,
+  shiftDate, transactionAmountClass, useQuery } from './finance-ui';
 import type { Account, Category, Session } from './finance-ui';
 import { AdminLink, adminPaths, navigate } from './navigation';
 import { scheduleWords } from './schedule-copy';
@@ -206,10 +207,13 @@ export function ScheduleWorkspace({ account, accounts, userId, today, timeZone, 
           const key = occurrenceKey(entry);
           const eligible = entry.status === 'needs_intervention' && !!entry.failureRevision && !entry.recoveryHeld &&
             !accounts.find(({ accountId }) => accountId === entry.accountId)?.archived;
+          const amountMinor = entry.kind === 'expense' ? '-' + entry.amountMinor : entry.amountMinor;
           return <div className="schedule-date-row" key={key} data-testid={'admin-schedule-date-' + key}>
             <div className="finance-line">
               <strong>{dateLabel(entry.date, lang)} · {categoryLabel(entry.categoryId, categories ?? [], lang) ?? f[entry.kind]}</strong>
-              <span className="money">{ruleAmount(entry, lang)}</span>
+              <span className={entry.status === 'posted' ? transactionAmountClass(amountMinor) : 'money'}>
+                {formatMoney(amountMinor, entry.currency, lang, true)}
+              </span>
             </div>
             <p className={entry.status === 'needs_intervention' ? 'schedule-attention' : 'muted'}>{t[entry.status]}</p>
             {entry.recoveryHeld && <p className="muted">{t.recoveryHeld}</p>}

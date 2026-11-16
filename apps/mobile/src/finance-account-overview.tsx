@@ -5,20 +5,23 @@ import type { Language, Result } from '@teta/contracts';
 import { AccountBalancePlot, AccountMonthlyFlow } from './finance-account-charts';
 import { cashFlowSeries } from './finance-cash-flow';
 import { financeCopy } from './finance-copy';
-import { formatAmount, formatFinancialDate, formatMoney } from './finance-format';
+import { formatFinancialDate, formatMoney } from './finance-format';
+import { CardNetworkLogo, cardNetworkLabel } from './finance-card-network';
+import { FinanceIcon } from './finance-icon';
 import { statisticsCopy } from './finance-statistics-copy';
-import { FinanceAlert, palette, styles } from './finance-ui';
+import { FinanceAlert, FinanceButton, palette, styles, transactionAmountColor } from './finance-ui';
 
 type Account = Result<'listAccounts'>['accounts'][number];
 type History = Result<'listAccountHistory'>;
 type Entry = History['entries'][number];
 type Category = Result<'listCategories'>['categories'][number];
 type BalanceSeries = Result<'getAccountBalanceSeries'>;
+type LinkedCard = Result<'listAccountCards'>['cards'][number];
 type MonthSection = { key: string; title: string; data: Entry[] };
 
 export function AccountOverview({ account, depositTerms, lang, categories, month, balanceSeries, balanceSeriesError,
-  monthlyActivity, totalsError, history, historyBusy, historyError, accountError, refreshing, created,
-  onRefresh, onMore, onTransaction }: {
+  cards, cardsError, monthlyActivity, totalsError, history, historyBusy, historyError, accountError, refreshing, created,
+  onRefresh, onMore, onTransaction, onOpenCard, onManageCards, onReloadCards }: {
   account?: Account;
   depositTerms: string;
   lang: Language;
@@ -26,6 +29,8 @@ export function AccountOverview({ account, depositTerms, lang, categories, month
   month: string;
   balanceSeries?: BalanceSeries;
   balanceSeriesError: boolean;
+  cards?: LinkedCard[];
+  cardsError: boolean;
   monthlyActivity?: Result<'getStatistics'>;
   totalsError: boolean;
   history?: History;
@@ -37,6 +42,9 @@ export function AccountOverview({ account, depositTerms, lang, categories, month
   onRefresh: () => void;
   onMore: () => void;
   onTransaction: (id: string) => void;
+  onOpenCard: (id: string) => void;
+  onManageCards: () => void;
+  onReloadCards: () => void;
 }) {
   const t = financeCopy[lang];
   const s = statisticsCopy[lang];
@@ -61,7 +69,7 @@ export function AccountOverview({ account, depositTerms, lang, categories, month
     opening: t.opening, adjustment: t.adjustment, expense: t.expenseEntry, income: t.incomeEntry, transfer: t.transfer,
   };
   const series = account && balanceSeries && balanceSeries.accountVersion >= account.accountVersion ? balanceSeries : undefined;
-  const balance = account ? formatAmount(series?.points.at(-1)?.balanceMinor ?? account.balanceMinor, lang) : '';
+  const balance = account ? formatMoney(series?.points.at(-1)?.balanceMinor ?? account.balanceMinor, account.currency, lang) : '';
   const amounts = monthlyActivity?.totals.find(({ currency }) => currency === account?.currency);
   const metrics = account && monthlyActivity && cashFlowSeries.map(({ field, color, label }) => ({
     label: s[label], color, amount: formatMoney(amounts?.[field] ?? '0', account.currency, lang),
@@ -81,19 +89,48 @@ export function AccountOverview({ account, depositTerms, lang, categories, month
       {account && <>
         <View style={layout.balance}>
           <Text accessibilityRole="header" style={layout.balanceLabel}>{t.accountBalance}</Text>
-          <View style={layout.balanceValue} accessible accessibilityLabel={`${balance} ${account.currency}`}
-            accessibilityLiveRegion="polite" testID="finance-detail-balance">
-            <Text style={layout.balanceAmount} numberOfLines={1} adjustsFontSizeToFit>{balance}</Text>
-            <Text style={layout.balanceCurrency}>{account.currency}</Text>
-          </View>
-          <Text style={styles.meta}>
+          <Text style={layout.balanceAmount} numberOfLines={1} adjustsFontSizeToFit
+            accessibilityLiveRegion="polite" testID="finance-detail-balance">{balance}</Text>
+          <Text style={layout.balanceMeta}>
             {t['type' in account ? account.type : 'regular']} · {formatFinancialDate(account.startDate, lang)}
           </Text>
-          {!!depositTerms && <Text style={styles.meta}>{depositTerms}</Text>}
-          {account.archived && <Text style={styles.meta}>{t.archivedAccount}</Text>}
-          {account.needsReconciliation && <FinanceAlert>{t.needsReconciliation}</FinanceAlert>}
-          {created && <Text style={styles.meta} testID="finance-receipt" accessibilityLiveRegion="polite">{t.accountCreated}</Text>}
+          {!!depositTerms && <Text style={layout.balanceMeta}>{depositTerms}</Text>}
+          {account.archived && <Text style={layout.balanceMeta}>{t.archivedAccount}</Text>}
+          {account.needsReconciliation && <FinanceAlert style={layout.balanceAlert}>{t.needsReconciliation}</FinanceAlert>}
+          {created && <Text style={layout.balanceMeta} testID="finance-receipt" accessibilityLiveRegion="polite">{t.accountCreated}</Text>}
         </View>
+        {(!!cards?.length || cardsError) && <View style={layout.cardSection}>
+          <View style={layout.cardHeader}>
+            <Text accessibilityRole="header" style={styles.section} testID="finance-detail-cards">{t.cards}</Text>
+            <Pressable accessibilityRole="button" accessibilityLabel={t.manageAccount}
+              onPress={onManageCards} testID="finance-detail-manage-cards"
+              style={({ pressed }) => [layout.manageCards, pressed && styles.dimmed]}>
+              <Text style={layout.manageCardsLabel}>{t.manageCards}</Text>
+              <FinanceIcon name="chevron" color={palette.accent} size={14} />
+            </Pressable>
+          </View>
+          {!!cards?.length && <View style={styles.surface}>
+            {cards.map(({ cardId, name, lastFour, network }, index) => (
+              <Pressable key={cardId} accessibilityRole="button" testID={'finance-detail-card-' + cardId}
+                accessibilityLabel={[name, cardNetworkLabel(network, lang), lastFour].filter(Boolean).join(', ')}
+                onPress={() => onOpenCard(cardId)}
+                style={({ pressed }) => [layout.linkedCard, index < cards.length - 1 && layout.divider, pressed && styles.dimmed]}>
+                <CardNetworkLogo network={network} />
+                <View style={layout.cardIdentity}>
+                  <Text style={styles.title}>{name}</Text>
+                  {lastFour && <Text style={layout.cardDigits}>{'•••• ' + lastFour}</Text>}
+                </View>
+                <FinanceIcon name="chevron" color={palette.muted} size={14} />
+              </Pressable>
+            ))}
+          </View>}
+          {cardsError && <View style={[styles.surface, layout.cardLoadError]}>
+            <FinanceAlert>{t.cardsLoadError}</FinanceAlert>
+            <View style={layout.cardRetry}>
+              <FinanceButton title={t.reloadCards} onPress={onReloadCards} />
+            </View>
+          </View>}
+        </View>}
         <View style={[styles.surface, layout.summary]}>
           <Text accessibilityRole="header" style={styles.groupTitle}>{t.balanceTrend}</Text>
           {series && <AccountBalancePlot series={series} lang={lang} />}
@@ -140,7 +177,8 @@ export function AccountOverview({ account, depositTerms, lang, categories, month
           {isVoided && <Text style={styles.meta}>{t.void}</Text>}
           {'actorRole' in item && item.actorRole === 'admin' && <Text style={styles.meta}>{t.changedByAdmin}</Text>}
         </View>
-        <Text style={[layout.amount, isVoided && styles.mutedValue]}>
+        <Text style={[layout.amount, item.type !== 'opening' && { color: transactionAmountColor(item.amountMinor) },
+          isVoided && styles.mutedValue]}>
           {history && formatMoney(item.amountMinor, history.currency, lang, item.type !== 'opening')}
         </Text>
       </View>;
@@ -162,11 +200,21 @@ export function AccountOverview({ account, depositTerms, lang, categories, month
 const layout = StyleSheet.create({
   content: { ...styles.page, gap: 0 },
   header: { gap: 14 },
-  balance: { backgroundColor: palette.selected, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12, gap: 4 },
-  balanceLabel: { ...styles.groupTitle, color: palette.muted },
-  balanceValue: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'baseline', columnGap: 8 },
-  balanceAmount: { ...styles.heroValue, fontSize: 40, fontWeight: '700', letterSpacing: -0.8, maxWidth: '100%', flexShrink: 1 },
-  balanceCurrency: { color: palette.accent, fontSize: 15, fontWeight: '600' },
+  balance: { backgroundColor: palette.balanceSurface, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12, gap: 4 },
+  balanceLabel: { ...styles.groupTitle, color: palette.balanceMuted },
+  balanceAmount: { ...styles.heroValue, color: palette.panel, fontSize: 40, fontWeight: '700', letterSpacing: -0.8,
+    maxWidth: '100%', flexShrink: 1 },
+  balanceMeta: { ...styles.meta, color: palette.balanceMuted },
+  balanceAlert: { color: '#FFB4BB' },
+  cardSection: { gap: 4 },
+  cardHeader: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', columnGap: 12 },
+  manageCards: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 4, flexShrink: 1 },
+  manageCardsLabel: { color: palette.accent, flexShrink: 1, fontSize: 14, fontWeight: '600' },
+  linkedCard: { flexDirection: 'row', alignItems: 'center', minHeight: 54, gap: 10, paddingHorizontal: 12, paddingVertical: 8 },
+  cardIdentity: { flex: 1, gap: 2 },
+  cardDigits: { ...styles.meta, fontVariant: ['tabular-nums'] },
+  cardLoadError: { gap: 8, padding: 12 },
+  cardRetry: { alignItems: 'flex-start' },
   summary: { padding: 12, gap: 9 },
   metrics: { flexDirection: 'row', gap: 12 },
   metricsStack: { gap: 9 },

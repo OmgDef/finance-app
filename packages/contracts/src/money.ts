@@ -2,6 +2,20 @@ import type { Language } from './index.ts';
 
 export type Currency = 'USD' | 'EUR' | 'RUB';
 
+const currencySymbols: Record<Currency, string> = { USD: '$', EUR: '€', RUB: '₽' };
+const currencyNames: Record<Language, Record<Currency, string>> = {
+  en: { USD: 'US dollar', EUR: 'Euro', RUB: 'Ruble' },
+  ru: { USD: 'Доллар США', EUR: 'Евро', RUB: 'Рубль' },
+};
+
+export function currencySymbol(currency: Currency) {
+  return currencySymbols[currency];
+}
+
+export function currencyName(currency: Currency, lang: Language) {
+  return currencyNames[lang][currency];
+}
+
 export function amountInMinorUnits(value: string, lang: Language): string | undefined {
   const normalized = value.trim().replace(/^−/, '-').replace(/[\u00a0\u202f]/g, ' ');
   const negative = normalized.startsWith('-');
@@ -31,5 +45,5 @@ export function formatAmount(minor: string, lang: Language, showPlus = false) {
 }
 
 export function formatMoney(minor: string, currency: Currency, lang: Language, showPlus = false) {
-  return formatAmount(minor, lang, showPlus) + ' ' + currency;
+  return formatAmount(minor, lang, showPlus) + '\u00a0' + currencySymbol(currency);
 }

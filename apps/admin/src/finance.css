@@ -38,6 +38,8 @@ a.ledger-account-button, a.history-row { color: inherit; font-size: 14px; text-d
 .ledger-history > button { justify-self: start; }
 :is(button, a).history-row:hover, .ledger-account-button:not([aria-current="page"], [aria-disabled="true"]):hover { background: #f1f5f1; }
 .history-row:focus-visible, .ledger-account-button:focus-visible { outline-offset: -2px; }
+.money-credit { color: #226349; }
+.money-debit { color: #ad343e; }
 .void-amount { text-decoration: line-through; color: var(--muted); }
 .finance-empty, .finance-notice { padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; }
 .finance-notice { background: #f2f6f2; color: #284633; }
@@ -52,6 +54,9 @@ a.ledger-account-button, a.history-row { color: inherit; font-size: 14px; text-d
 }
 .finance-fields :is(select, textarea):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .finance-fields :is(input, select, textarea) { width: 100%; }
+.currency-input { position: relative; display: grid; align-items: center; }
+.currency-input input { padding-inline-end: 32px; text-align: end; }
+.currency-input > span { position: absolute; inset-inline-end: 12px; pointer-events: none; }
 .finance-fields textarea { resize: vertical; }
 .finance-fields label { min-width: 0; }
 .finance-fields .check-control { display: flex; align-items: center; gap: 8px; min-height: 44px; }

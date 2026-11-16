@@ -38,7 +38,7 @@ type BalanceAdjustmentRow = Omit<BalanceAdjustment, 'createdAt' | 'skippedDates'
 };
 type CurrencyBalance = Result<'getCurrencySummary'>['balances'][number];
 type AccountCard = Result<'createAccountCard'>;
-type CardDetails = Pick<AccountCard, 'cardId' | 'name' | 'appearance' | 'lastFour'>;
+type CardDetails = Pick<AccountCard, 'cardId' | 'name' | 'appearance' | 'lastFour' | 'network'>;
 type CardPreview = Result<'listAccounts'>['cardPreviews'][number];
 type CardParams = Params<'updateAccountCard'>;
 const maxMinor = 9223372036854775807n;
@@ -126,13 +126,13 @@ export async function listMobileAccounts(tx: Tx, userId: string): Promise<Result
   const { accounts } = await listAccounts(tx, userId);
   const cards = await rows<CardDetails & { accountId: string; cardCount: number }>(tx, sql`
     WITH ranked AS (
-      SELECT c.account_id AS accountId, c.id AS cardId, c.name, c.appearance, c.last_four AS lastFour,
+      SELECT c.account_id AS accountId, c.id AS cardId, c.name, c.appearance, c.last_four AS lastFour, c.network,
         COUNT(*) OVER (PARTITION BY c.account_id) AS cardCount,
         ROW_NUMBER() OVER (PARTITION BY c.account_id ORDER BY c.id) AS cardPosition
       FROM account_cards c JOIN accounts a ON a.id = c.account_id
       WHERE a.user_id = ${userId} AND a.archived = FALSE
     )
-    SELECT accountId, cardId, name, appearance, lastFour, cardCount
+    SELECT accountId, cardId, name, appearance, lastFour, network, cardCount
     FROM ranked WHERE cardPosition <= 2 ORDER BY accountId, cardPosition`);
   const previews = new Map<string, CardPreview>();
   for (const { accountId, cardCount, ...card } of cards) {
@@ -159,7 +159,7 @@ export async function getCurrencySummary(tx: Tx, userId: string): Promise<Result
 
 export async function listAccountCards(tx: Tx, userId: string, accountId: string): Promise<Result<'listAccountCards'>> {
   const { currency, balanceMinor } = await getAccountBalance(tx, userId, accountId);
-  const cards = await rows<CardDetails>(tx, sql`SELECT id AS cardId, name, appearance, last_four AS lastFour
+  const cards = await rows<CardDetails>(tx, sql`SELECT id AS cardId, name, appearance, last_four AS lastFour, network
     FROM account_cards WHERE account_id = ${accountId} ORDER BY id`);
   return { cards: cards.map((card) => ({ ...card, accountId, currency, balanceMinor })) };
 }
@@ -350,19 +350,21 @@ function writeAccountCard<T>(withAccess: WithCommandAccess, accountId: string,
 }
 
 async function lockCard(tx: Tx, { accountId, cardId }: CardParams) {
-  const card = await one(tx, sql`SELECT id FROM account_cards WHERE id = ${cardId} AND account_id = ${accountId} FOR UPDATE`);
+  const card = await one<Pick<CardDetails, 'network'>>(tx, sql`SELECT network FROM account_cards
+    WHERE id = ${cardId} AND account_id = ${accountId} FOR UPDATE`);
   if (!card) throw new AccessError(404, 'NOT_FOUND');
+  return card;
 }
 
 export function createAccountCard(withAccess: WithCommandAccess, accountId: string, input: Body<'createAccountCard'>) {
   const cardId = randomUUID();
-  const { name, appearance, lastFour = null } = input;
+  const { name, appearance, lastFour = null, network = null } = input;
   return writeAccountCard<AccountCard>(withAccess, accountId, async (tx, userId, now) => {
-    await tx.execute(sql`INSERT INTO account_cards (id, account_id, name, appearance, last_four)
-      VALUES (${cardId}, ${accountId}, ${name}, ${appearance}, ${lastFour})`);
+    await tx.execute(sql`INSERT INTO account_cards (id, account_id, name, appearance, last_four, network)
+      VALUES (${cardId}, ${accountId}, ${name}, ${appearance}, ${lastFour}, ${network})`);
     await audit(tx, now, 'user', 'finance.card.created', userId, userId, cardId);
     const { currency, balanceMinor } = await getAccountBalance(tx, userId, accountId);
-    return { cardId, accountId, name, appearance, lastFour, currency, balanceMinor };
+    return { cardId, accountId, name, appearance, lastFour, network, currency, balanceMinor };
   });
 }
 
@@ -370,12 +372,13 @@ export function updateAccountCard(withAccess: WithCommandAccess, params: CardPar
   const { accountId, cardId } = params;
   const { name, appearance, lastFour = null } = input;
   return writeAccountCard<AccountCard>(withAccess, accountId, async (tx, userId, now) => {
-    await lockCard(tx, params);
-    await tx.execute(sql`UPDATE account_cards SET name = ${name}, appearance = ${appearance}, last_four = ${lastFour}
+    const card = await lockCard(tx, params);
+    const { network = card.network } = input;
+    await tx.execute(sql`UPDATE account_cards SET name = ${name}, appearance = ${appearance}, last_four = ${lastFour}, network = ${network}
       WHERE id = ${cardId} AND account_id = ${accountId}`);
     await audit(tx, now, 'user', 'finance.card.updated', userId, userId, cardId);
     const { currency, balanceMinor } = await getAccountBalance(tx, userId, accountId);
-    return { cardId, accountId, name, appearance, lastFour, currency, balanceMinor };
+    return { cardId, accountId, name, appearance, lastFour, network, currency, balanceMinor };
   });
 }
 

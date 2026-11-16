@@ -1,7 +1,8 @@
 import type { Language } from '@teta/contracts';
+import { currencySymbol } from '@teta/contracts/money';
 import type { Currency } from '@teta/contracts/money';
 
-export { amountInMinorUnits, formatAmount, formatMoney } from '@teta/contracts/money';
+export { amountInMinorUnits, currencyName, currencySymbol, formatAmount, formatMoney } from '@teta/contracts/money';
 export type { Currency } from '@teta/contracts/money';
 export const currencies: readonly Currency[] = ['USD', 'EUR', 'RUB'];
 
@@ -105,5 +106,5 @@ export function formatTransferRate(fromMinor: string, toMinor: string, from: Cur
   const whole = digits.slice(0, -places);
   const fraction = digits.slice(-places).replace(/0+$/, '');
   const formatted = fraction ? whole + (lang === 'ru' ? ',' : '.') + fraction : whole;
-  return '1 ' + from + (remainder ? ' ≈ ' : ' = ') + formatted + ' ' + to;
+  return '1\u00a0' + currencySymbol(from) + (remainder ? ' ≈ ' : ' = ') + formatted + '\u00a0' + currencySymbol(to);
 }

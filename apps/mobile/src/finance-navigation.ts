@@ -4,7 +4,8 @@ import type { SchedulePage } from './finance-schedule';
 
 export type AccountEditor = { kind: 'rename' | 'startDate' } | { kind: 'card'; cardId?: string };
 type AccountPage = { name: 'history' | 'manage' | 'reconcile'; accountId: string } |
-  { name: 'accountEditor'; accountId: string; editor: AccountEditor };
+  { name: 'cardDetails'; accountId: string; cardId: string } |
+  { name: 'accountEditor'; accountId: string; editor: AccountEditor; fromCardDetails?: boolean };
 export type FinancePage = { name: 'archive' | 'addAccount' | 'accountSettings' } | AccountPage | SchedulePage |
   { name: 'record'; kind: TransactionFields['type']; accountId: string | null; categoryId?: string } |
   { name: 'transaction'; transactionId: string } | { name: 'revise'; transactionId: string; version?: number };
@@ -27,6 +28,10 @@ export function financePage(route: FinanceRoute, params: Record<string, string |
     case 'history':
     case 'manage':
     case 'reconcile': return accountId ? { name: route, accountId } : undefined;
+    case 'cardDetails': {
+      const cardId = routeParameter(params.cardId);
+      return accountId && cardId ? { name: route, accountId, cardId } : undefined;
+    }
     case 'accountRename':
     case 'accountStartDate':
     case 'cardCreate':
@@ -35,7 +40,8 @@ export function financePage(route: FinanceRoute, params: Record<string, string |
       if (!accountId || (route === 'cardEdit' && !cardId)) return;
       const editor: AccountEditor = route === 'accountRename' ? { kind: 'rename' } : route === 'accountStartDate'
         ? { kind: 'startDate' } : { kind: 'card', cardId };
-      return { name: 'accountEditor', accountId, editor };
+      return { name: 'accountEditor', accountId, editor,
+        ...(route === 'cardEdit' && params.from === 'card-details' && { fromCardDetails: true }) };
     }
     case 'transaction': return transactionId ? { name: route, transactionId } : undefined;
     case 'revise': {
@@ -75,6 +81,7 @@ export function financePath(page: FinancePage): string {
     case 'accountSettings': return '/settings/accounts';
     case 'addAccount': return '/accounts/new';
     case 'history': return '/accounts/' + encodeURIComponent(page.accountId);
+    case 'cardDetails': return `/accounts/${encodeURIComponent(page.accountId)}/cards/${encodeURIComponent(page.cardId)}/details`;
     case 'manage': return '/accounts/' + encodeURIComponent(page.accountId) + '/manage';
     case 'reconcile': return '/accounts/' + encodeURIComponent(page.accountId) + '/reconcile';
     case 'accountEditor': {
@@ -98,6 +105,7 @@ export function financePath(page: FinancePage): string {
 
 export function financeHref(page: FinancePage) {
   const query = new URLSearchParams();
+  if (page.name === 'accountEditor' && page.fromCardDetails) query.set('from', 'card-details');
   if ((page.name === 'schedule' || page.name === 'record') && page.accountId) query.set('accountId', page.accountId);
   if (page.name === 'record' && page.kind === 'expense' && page.categoryId) query.set('categoryId', page.categoryId);
   if (page.name === 'revise' && page.version) query.set('version', String(page.version));

@@ -5,20 +5,21 @@ import {
   ActivityIndicator, Alert, Platform, Pressable, RefreshControl,
   StyleSheet, Text, View,
 } from 'react-native';
-import { KeyboardController, KeyboardToolbar } from 'react-native-keyboard-controller';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { KeyboardController, KeyboardStickyView, KeyboardToolbar } from 'react-native-keyboard-controller';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAccessSession } from './access-session';
 import type { Language, Result } from '@teta/contracts';
 import { request } from './api';
 import { copy } from './copy';
 import { AccountManagement } from './finance-account-management';
 import { AccountOverview } from './finance-account-overview';
+import { CardDetails } from './finance-card-details';
 import { apiErrorCode, useFinanceCommand } from './finance-commands';
 import type { CommandResult, FinanceAccess, FinanceCommand, TransactionFields } from './finance-commands';
 import { financeCopy } from './finance-copy';
 import type { FinanceCopyKey } from './finance-copy';
 import { BalanceCard, CashFlowCard, ExchangeRatesCard, NextPaymentCard, OverviewAccountCard } from './finance-dashboard';
-import { formatAmount, formatFinancialDate, formatMoney, formatProfileMoment, formatRate, recentStatisticsPeriod } from './finance-format';
+import { formatFinancialDate, formatMoney, formatProfileMoment, formatRate, recentStatisticsPeriod } from './finance-format';
 import { AccountForm, TransactionForm } from './finance-forms';
 import { FinanceIcon } from './finance-icon';
 import { PaymentsScreen } from './finance-payments';
@@ -29,6 +30,7 @@ import type { FinancePage, FinanceRoute } from './finance-navigation';
 import { scheduleCopy } from './finance-schedule-copy';
 import { StatisticsScreen, useStatistics } from './finance-statistics';
 import type { StatisticsFilterEditor, StatisticsPreset } from './finance-statistics';
+import { statisticsCopy } from './finance-statistics-copy';
 import { appTabs } from './finance-tabs';
 import type { FinanceTab } from './finance-tabs';
 import { revisionFields, TransactionVersions } from './finance-transaction';
@@ -82,6 +84,7 @@ function useWorkspaceModel(access: FinanceAccess, lang: Language) {
   const [accountNotice, setAccountNotice] = useState<AccountNotice>();
   const [statisticsFilterEditor, setStatisticsFilterEditor] = useState<StatisticsFilterEditor>();
   const [revision, setRevision] = useState(0);
+  const [lastExpenseAccountId, setLastExpenseAccountId] = useState<string>();
   const accountsRequest = useRef(0);
   const categoriesRequest = useRef(0);
   const activeAccounts = accounts?.filter((account) => !account.archived) ?? [];
@@ -152,6 +155,9 @@ function useWorkspaceModel(access: FinanceAccess, lang: Language) {
   const command = useFinanceCommand(access, (result, kind) => {
     const receipt = { command: kind, result };
     const current = location.current;
+    if (kind === 'expense.record' && 'transactionId' in result && 'accountId' in result) {
+      setLastExpenseAccountId(result.accountId);
+    }
     void loadAccounts();
     invalidate();
     if ('occurrenceId' in result || 'replacementRule' in result) {
@@ -211,7 +217,7 @@ function useWorkspaceModel(access: FinanceAccess, lang: Language) {
   return { access, lang, blocked, accounts, cardPreviews, categories, activeAccounts, archivedAccounts, listError, categoryError, refreshing,
     receipt: receipt?.path === pathname ? receipt : undefined, setReceipt, revision, command,
     accountNotice, setAccountNotice, loadAccounts, loadCategories, updateAccount, invalidate, go,
-    statisticsFilterEditor, openStatisticsFilters,
+    statisticsFilterEditor, openStatisticsFilters, lastExpenseAccountId,
   };
 }
 
@@ -275,11 +281,13 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
   const { timeZoneSuggestion } = useAccessSession();
   const { access, lang, blocked, accounts, cardPreviews, categories, activeAccounts, archivedAccounts, listError, categoryError,
     refreshing, receipt, setReceipt, revision, command, accountNotice, setAccountNotice,
-    loadAccounts, loadCategories, updateAccount, invalidate, go, openStatisticsFilters,
+    loadAccounts, loadCategories, updateAccount, invalidate, go, openStatisticsFilters, lastExpenseAccountId,
   } = useFinanceWorkspace();
   const router = useRouter();
+  const { bottom } = useSafeAreaInsets();
+  const [footerHeight, setFooterHeight] = useState(0);
   const [localWrite, setLocalWrite] = useState(false);
-  const [afterSave, setAfterSave] = useState<{ page: FinancePage; replace?: boolean }>();
+  const [afterSave, setAfterSave] = useState<{ page: FinancePage; replace?: boolean; dismissTo?: boolean }>();
   const [scheduleRefresh, setScheduleRefresh] = useState(0);
   const [paymentsRefresh, setPaymentsRefresh] = useState(0);
   const t = financeCopy[lang];
@@ -310,6 +318,8 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
   const account = accountId ? accounts?.find((entry) => entry.accountId === accountId) : undefined;
   const historyId = page.name === 'history' ? page.accountId : undefined;
   const transactionId = 'transactionId' in page ? page.transactionId : undefined;
+  const linkedCards = useFinanceRead(page.name === 'cardDetails' ? page.accountId : historyId, revision, access, (accountId) =>
+    request('listAccountCards', { token: access.token, params: { accountId } }), focused);
   const history = useFinanceRead(historyId, revision, access, (accountId, before) =>
     request('listAccountHistory', { token: access.token, params: { accountId },
       query: before ? new URLSearchParams({ before }) : undefined }));
@@ -350,6 +360,7 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
     (page.name === 'revise' && page.version !== undefined && !!activeTransaction && page.version !== activeTransaction.transactionVersion);
   const formKind = page.name === 'record' ? page.kind : page.name === 'revise' ? initialRevision?.type : undefined;
   const defaultCategoryId = page.name === 'record' ? page.categoryId : undefined;
+  const quickExpense = formKind === 'expense' && !!defaultCategoryId;
   const receiptResult = receipt?.result;
   const receiptAccounts = receiptResult && ('fromAccount' in receiptResult ? [receiptResult.fromAccount, receiptResult.toAccount]
     : 'accounts' in receiptResult ? receiptResult.accounts : 'balanceMinor' in receiptResult ? [receiptResult] : []);
@@ -357,7 +368,7 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
   const reconciling = page.name === 'reconcile';
   const isForm = page.name === 'addAccount' || page.name === 'accountEditor' || reconciling || !!formKind ||
     (page.name === 'schedule' && (!!page.editor || !!page.skipDate));
-  const showKeyboardToolbar = Platform.OS === 'ios' && isForm;
+  const showKeyboardToolbar = Platform.OS === 'ios' && isForm && !quickExpense;
 
   useEffect(() => {
     if (!reconciling) return;
@@ -377,7 +388,8 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
   useEffect(() => {
     if (!afterSave || writing || !focused) return;
     setAfterSave(undefined);
-    if (afterSave.replace) router.replace(financeHref(afterSave.page));
+    if (afterSave.dismissTo) router.dismissTo(financeHref(afterSave.page));
+    else if (afterSave.replace) router.replace(financeHref(afterSave.page));
     else returnTo(afterSave.page);
   }, [afterSave, writing, focused]);
 
@@ -404,6 +416,7 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
       void nextPayment.load();
     }
     if (historyId) {
+      void linkedCards.load();
       void history.load();
       void balanceSeries.load();
       void monthlyActivity.load();
@@ -439,16 +452,31 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
     }
   }
 
+  if (page.name === 'cardDetails') {
+    const { accountId, cardId } = page;
+    const card = linkedCards.data?.cards.find((entry) => entry.cardId === cardId);
+    const accountHistory = { name: 'history' as const, accountId };
+    return <CardDetails card={card} accountName={account?.name} lang={lang} loading={linkedCards.busy}
+      error={linkedCards.error && linkedCards.error !== 'NOT_FOUND' ? t.cardsLoadError : undefined}
+      editDisabled={blocked || !account} onClose={() => returnTo(accountHistory)}
+      onOpenAccount={() => router.dismissTo(financeHref(accountHistory))} onRetry={() => void linkedCards.load()}
+      onEdit={() => go({ name: 'accountEditor', accountId, editor: { kind: 'card', cardId }, fromCardDetails: true })} />;
+  }
+
   if (page.name === 'history') {
     return <SafeAreaView style={layout.container} edges={['left', 'right']}>
       <Stack.Screen options={{ title: screenTitle(), gestureEnabled: !writing }} />
       <AccountOverview key={page.accountId} account={account} depositTerms={account ? depositTerms(account, lang) : ''}
         lang={lang} categories={categories} month={monthlyActivity.data?.fromDate.slice(0, 7) ?? month}
+        cards={linkedCards.data?.cards} cardsError={!!linkedCards.error}
         balanceSeries={balanceSeries.data} balanceSeriesError={!!balanceSeries.error} monthlyActivity={monthlyActivity.data}
         totalsError={!!monthlyActivity.error} history={history.data} historyBusy={history.busy} historyError={!!history.error}
         accountError={listError ? t.accountOverviewError : accounts && !account ? t.unavailable : undefined}
         refreshing={refreshing} onRefresh={refresh}
         created={receipt?.command === 'account.create'}
+        onOpenCard={(cardId) => go({ name: 'cardDetails', accountId: page.accountId, cardId })}
+        onManageCards={() => go({ name: 'manage', accountId: page.accountId })}
+        onReloadCards={() => void linkedCards.load()}
         onTransaction={(transactionId) => go({ name: 'transaction', transactionId })}
         onMore={() => {
           const cursor = history.data?.next;
@@ -461,10 +489,12 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
     </SafeAreaView>;
   }
 
-  return <SafeAreaView style={layout.container} edges={inStack ? ['left', 'right'] : ['top', 'left', 'right']}>
+  const footerOffset = quickExpense ? Math.max(0, footerHeight - bottom) : 0;
+  const renderScreen = (transactionForm?: ReactNode, footer?: ReactNode) => <SafeAreaView style={layout.container}
+    edges={inStack ? ['left', 'right'] : ['top', 'left', 'right']}>
     {inStack && <Stack.Screen options={{ title: screenTitle(), gestureEnabled: !writing }} />}
     <FinanceScrollView ref={scroll} key={page.name + (historyId ?? '')} nativeTab={!inStack}
-      bottomOffset={showKeyboardToolbar ? 64 : 12} extraKeyboardSpace={showKeyboardToolbar ? 42 : 0}
+      bottomOffset={showKeyboardToolbar ? 64 : footerOffset + 12} extraKeyboardSpace={showKeyboardToolbar ? 42 : footerOffset}
       disableScrollOnKeyboardHide
       keyboardDismissMode={isForm ? 'none' : 'on-drag'}
       keyboardShouldPersistTaps="handled"
@@ -473,6 +503,8 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
         ? <RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={palette.accent} colors={[palette.accent]} />
         : undefined}>
       {showOverview && <FinanceBrand title={copy[lang].appName} />}
+      {page.name === 'statistics' && <Text accessibilityRole="header" style={styles.heading}>{statisticsCopy[lang].title}</Text>}
+      {showingSupport && <Text accessibilityRole="header" style={styles.heading}>{copy[lang].help}</Text>}
       {showingSupport && focused && <SupportScreen lang={lang} showHeading={false} />}
       {!showingSupport && <>
       {command.reading && <View style={layout.panel}>
@@ -545,7 +577,7 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
           <Text style={styles.meta}>{t.confirmedBalance}</Text>
           {receiptAccounts.map((item) => <View key={item.accountId} style={layout.currencyRow}>
             {receiptAccounts.length > 1 && <Text style={styles.meta}>
-              {accounts?.find(({ accountId }) => accountId === item.accountId)?.name ?? item.currency}
+              {accounts?.find(({ accountId }) => accountId === item.accountId)?.name ?? t.account}
             </Text>}
             <Text style={styles.value}>{formatMoney(item.balanceMinor, item.currency, lang)}</Text>
           </View>)}
@@ -580,14 +612,13 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
       {page.name === 'products' && <>
         {timeZoneSuggestion}
         {accounts && <BalanceCard accounts={activeAccounts} lang={lang} />}
-        <CashFlowCard read={cashFlow} accounts={accounts && activeAccounts} lang={lang}
-          onStatistics={(preset) => router.navigate({ pathname: '/(app)/(tabs)/statistics',
-            params: { ...preset, overview: String(Date.now()) } })} />
         {accounts && <View style={layout.section}>
           <Text accessibilityRole="header" style={styles.section}>{t.myAccounts}</Text>
-          {activeAccounts.length ? activeAccounts.map((entry) => <OverviewAccountCard key={entry.accountId}
-            account={entry} preview={previewsByAccount.get(entry.accountId)} lang={lang}
-            onOpen={() => go({ name: 'history', accountId: entry.accountId })} />)
+          {activeAccounts.length ? <View style={[styles.surface, layout.accountGroup]}>
+            {activeAccounts.map((entry, index) => <OverviewAccountCard key={entry.accountId}
+              account={entry} preview={previewsByAccount.get(entry.accountId)} lang={lang} divider={index > 0}
+              onOpen={() => go({ name: 'history', accountId: entry.accountId })} />)}
+          </View>
             : <Text style={styles.meta}>{t.addAccountInSettings}</Text>}
           {archivedAccounts.length > 0 && <Pressable accessibilityRole="button" onPress={() => go({ name: 'archive' })}
             style={({ pressed }) => [layout.archiveLink, pressed && layout.pressed]} testID="finance-archive">
@@ -595,10 +626,13 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
             <Text style={styles.meta}>{t.archived}</Text>
           </Pressable>}
         </View>}
-        <ExchangeRatesCard read={exchangeRates} lang={lang} />
         <NextPaymentCard read={nextPayment} categories={categories} lang={lang}
           onSchedule={(ruleId, date) => go({ name: 'schedule', accountId: null, ruleId,
             offset: date ? scheduleOffset(today, date) : undefined })} />
+        <CashFlowCard read={cashFlow} accounts={accounts && activeAccounts} lang={lang}
+          onStatistics={(preset) => router.navigate({ pathname: '/(app)/(tabs)/statistics',
+            params: { ...preset, overview: String(Date.now()) } })} />
+        <ExchangeRatesCard read={exchangeRates} lang={lang} />
       </>}
       {page.name === 'archive' && accounts && (archivedAccounts.length > 0
         ? <View style={styles.surface}>
@@ -616,10 +650,16 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
           onEditFilters={openStatisticsFilters} scrollToTop={() => scroll.current?.scrollTo({ y: 0, animated: false })}
           onTransaction={({ transactionId }) => go({ name: 'transaction', transactionId })} />
       </>}
-      {page.name === 'payments' && <PaymentsScreen access={access} lang={lang} accountCount={activeAccounts.length}
-        categories={categories} blocked={blocked} focused={focused} refreshSignal={paymentsRefresh}
-        onRecord={(kind, categoryId) => go({ name: 'record', kind, accountId: null, categoryId })}
-        onSchedule={(ruleId) => go({ name: 'schedule', accountId: null, ruleId })} />}
+      {page.name === 'payments' && <>
+        {categoryError && <View style={layout.section}>
+          <FinanceAlert>{localizedError(categoryError, lang)}</FinanceAlert>
+          <FinanceButton title={copy[lang].retry} onPress={() => void loadCategories()} />
+        </View>}
+        <PaymentsScreen access={access} lang={lang} accountCount={activeAccounts.length}
+          categories={categories} blocked={blocked} focused={focused} refreshSignal={paymentsRefresh}
+          onRecord={(kind, categoryId) => go({ name: 'record', kind, accountId: null, categoryId })}
+          onSchedule={(ruleId) => go({ name: 'schedule', accountId: null, ruleId })} />
+      </>}
       {page.name === 'schedule' && <>
         {categoryError && <View style={layout.section}>
           <FinanceAlert>{localizedError(categoryError, lang)}</FinanceAlert>
@@ -651,6 +691,16 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
           go({ name: 'accountEditor', accountId: account.accountId, editor });
         }}
         onFinish={(key) => {
+          if (page.name === 'accountEditor' && page.fromCardDetails && page.editor.kind === 'card' && page.editor.cardId) {
+            const details: FinancePage = { name: 'cardDetails', accountId: account.accountId, cardId: page.editor.cardId };
+            if (!key) returnTo(details);
+            else {
+              invalidate();
+              setAfterSave(key === 'cardDeleted' ? { page: { name: 'history', accountId: account.accountId }, dismissTo: true }
+                : { page: details });
+            }
+            return;
+          }
           const management: FinancePage = { name: 'manage', accountId: account.accountId };
           if (!key) returnTo(management);
           else {
@@ -685,12 +735,7 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
         </>}
         {formKind !== 'transfer' && !categories && !categoryError &&
           <ActivityIndicator color={palette.accent} accessibilityLabel={t.loading} />}
-        {accounts && (categories || formKind === 'transfer') && !archivedTransaction && <TransactionForm
-          key={page.name === 'revise' ? transactionId : [formKind, defaultCategoryId].join(':')}
-          lang={lang} today={access.profile.today}
-          disabled={blocked || transactionChanged || transaction.busy || !!transaction.error} onSubmit={submitTransaction} accounts={activeAccounts}
-          categories={categories ?? []} selectedAccountId={page.name === 'record' ? page.accountId : null}
-          kind={formKind} defaultCategoryId={defaultCategoryId} initial={page.name === 'revise' ? initialRevision : undefined} />}
+        {transactionForm}
       </>}
       {page.name === 'transaction' && <>
         {activeTransaction && <>
@@ -712,6 +757,10 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
         </>}
       </>}
     </FinanceScrollView>
+    {footer && <KeyboardStickyView enabled={focused} offset={{ opened: bottom }} style={layout.formFooter}
+      onLayout={({ nativeEvent }) => setFooterHeight(nativeEvent.layout.height)}>
+      <View style={[layout.formFooterContent, { paddingBottom: bottom + 8 }]}>{footer}</View>
+    </KeyboardStickyView>}
     {focused && showKeyboardToolbar && <KeyboardToolbar>
       <KeyboardToolbar.Content>
         <Pressable accessibilityRole="button" onPress={() => void KeyboardController.dismiss()}
@@ -721,6 +770,17 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
       </KeyboardToolbar.Content>
     </KeyboardToolbar>}
   </SafeAreaView>;
+
+  if (!formKind || !accounts || (!categories && formKind !== 'transfer') || archivedTransaction) return renderScreen();
+
+  const preferredAccount = quickExpense ? activeAccounts.find(({ accountId }) => accountId === lastExpenseAccountId) : undefined;
+  const form = <TransactionForm key={page.name === 'revise' ? transactionId : [formKind, defaultCategoryId].join(':')}
+    lang={lang} today={today} disabled={blocked || transactionChanged || transaction.busy || !!transaction.error}
+    onSubmit={submitTransaction} accounts={activeAccounts} categories={categories ?? []}
+    selectedAccountId={page.name === 'record' ? page.accountId ?? preferredAccount?.accountId ?? null : null}
+    kind={formKind} defaultCategoryId={defaultCategoryId} initial={page.name === 'revise' ? initialRevision : undefined}
+    renderQuickLayout={quickExpense ? renderScreen : undefined} />;
+  return quickExpense ? form : renderScreen(form);
 }
 
 function accountType(account: Account, lang: Language) {
@@ -747,15 +807,17 @@ function AccountRow({ account, lang, divider, open }: { account: Account; lang: 
         {account.needsReconciliation && <Text style={styles.meta}>{financeCopy[lang].needsReconciliation}</Text>}
       </View>
     </View>
-    <Text style={layout.accountValue}>{formatAmount(account.balanceMinor, lang)} <Text style={layout.currencyCode}>{account.currency}</Text></Text>
+    <Text style={layout.accountValue}>{formatMoney(account.balanceMinor, account.currency, lang)}</Text>
   </Pressable>;
 }
 
 const layout = StyleSheet.create({
   container: { flex: 1, backgroundColor: palette.ground },
+  accountGroup: { overflow: 'hidden' },
+  formFooter: { backgroundColor: palette.panel, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: palette.line },
+  formFooterContent: { width: '100%', maxWidth: 540, alignSelf: 'center', paddingTop: 10, paddingHorizontal: 18 },
   currencyRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'baseline',
     gap: 8, paddingVertical: 3 },
-  currencyCode: { color: palette.muted, fontSize: 11, fontWeight: '600' },
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   section: { gap: 10 },
   panel: { backgroundColor: palette.raised, padding: 14, borderRadius: 16, gap: 8 },

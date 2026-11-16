@@ -12,7 +12,7 @@ import { FinanceIcon } from './finance-icon';
 import { scheduleCopy } from './finance-schedule-copy';
 import { ScheduleEditor } from './finance-schedule-editor';
 import { ScheduleReplacement } from './finance-schedule-replacement';
-import { Choice, FinanceAlert, FinanceButton, FinanceField, palette, styles } from './finance-ui';
+import { Choice, FinanceAlert, FinanceButton, FinanceField, palette, styles, transactionAmountColor } from './finance-ui';
 
 export type SchedulePage = {
   name: 'schedule';
@@ -264,7 +264,7 @@ export function ScheduleScreen({ page, access, accounts, categories, lang, disab
         </Pressable>
         {accountFilterOpen && <Choice title={t.filterByAccount} value={accountId ?? 'all'} testID="schedule-filter-account"
           options={[{ id: 'all', label: t.allAccounts }, ...accounts.map((account) => ({
-            id: account.accountId, label: account.name + ' · ' + (account.archived ? f.archivedAccount : account.currency),
+            id: account.accountId, label: account.archived ? account.name + ' · ' + f.archivedAccount : account.name,
           }))]} onChange={(id) => {
             setAccountFilterOpen(false);
             onPage({ ...page, accountId: id === 'all' ? null : id });
@@ -328,15 +328,17 @@ export function ScheduleScreen({ page, access, accounts, categories, lang, disab
         {active.dates.map((entry) => {
           const showSkip = canSkip(entry) && earliestUnsettled.get(entry.ruleId) === entry.date &&
             accounts?.some((item) => item.accountId === entry.accountId && !item.archived);
+          const amountMinor = entry.kind === 'expense' ? '-' + entry.amountMinor : entry.amountMinor;
           return <View key={entry.ruleId + entry.date} style={layout.entry}
             testID={'schedule-date-' + entry.ruleId + '-' + entry.date}>
             <View style={layout.row}>
               <Text style={layout.identity}>{formatFinancialDate(entry.date, lang)} · {categoryName(entry.categoryId) ?? kindName(entry.kind)}</Text>
-              <Text style={layout.amount}>{formatMoney(entry.kind === 'expense' ? '-' + entry.amountMinor : entry.amountMinor,
-                entry.currency, lang, true)}</Text>
+              <Text style={[layout.amount, entry.status === 'posted' && { color: transactionAmountColor(amountMinor) }]}>
+                {formatMoney(amountMinor, entry.currency, lang, true)}
+              </Text>
             </View>
             <Text style={entry.status === 'needs_intervention' ? styles.alert : styles.meta}>{t[entry.status]}
-              {!ruleId && ' · ' + (accounts?.find((item) => item.accountId === entry.accountId)?.name ?? entry.currency)}</Text>
+              {!ruleId && ' · ' + (accounts?.find((item) => item.accountId === entry.accountId)?.name ?? t.unavailable)}</Text>
             {entry.comment && <Text style={styles.meta}>{entry.comment}</Text>}
             {entry.reason && <Text style={styles.meta}>{entry.reason}</Text>}
             {entry.sourceOccurrenceId && <Text style={styles.meta}>{t.carriedSkip}</Text>}
@@ -369,7 +371,7 @@ export function ScheduleScreen({ page, access, accounts, categories, lang, disab
             <Text style={layout.amount}>{formatMoney(rule.amountMinor, rule.currency, lang)}</Text>
           </View>
           <Text style={styles.meta}>{t[rule.frequency]} · {t[rule.state]}{rule.recoveryHeld && ' · ' + t.recoveryHeld}
-            {!accountId && ' · ' + (accounts?.find((item) => item.accountId === rule.accountId)?.name ?? rule.currency)}</Text>
+            {!accountId && ' · ' + (accounts?.find((item) => item.accountId === rule.accountId)?.name ?? t.unavailable)}</Text>
         </Pressable>)}
       </View>}
     </>}

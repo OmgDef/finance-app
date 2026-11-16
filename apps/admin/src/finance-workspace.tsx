@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import type { Body, Language, Result } from '@teta/contracts';
-import { formatMoney } from '@teta/contracts/money';
+import { currencyName, formatMoney } from '@teta/contracts/money';
 import type { Currency } from '@teta/contracts/money';
 import { api, errorCode } from './api';
 import type { AdminCommands } from './commands';
 import { financeWords } from './finance-copy';
-import { categoryLabel, dateLabel, EditorHeading, Failure, firstFinancialDate, lastFinancialDate, LabeledInput, useAmount, useQuery } from './finance-ui';
+import { categoryLabel, dateLabel, EditorHeading, Failure, firstFinancialDate, lastFinancialDate, LabeledInput,
+  transactionAmountClass, useAmount, useQuery } from './finance-ui';
 import type { Account, Category, Session } from './finance-ui';
 import { AdminLink, adminPaths, navigate } from './navigation';
 import type { FinanceRoute } from './navigation';
@@ -201,11 +202,11 @@ function CreateAccount({ today, userId, session, lang, commands, disabled }: {
           {(['regular', 'cash', 'deposit'] as const).map((value) => <option key={value} value={value}>{t[value]}</option>)}
         </select></label>
         <label>{t.currency}<select value={currency} onChange={(event) => setCurrency(event.target.value as Currency)}>
-          {['EUR', 'USD', 'RUB'].map((value) => <option key={value}>{value}</option>)}
+          {(['EUR', 'USD', 'RUB'] as const).map((value) => <option key={value} value={value}>{currencyName(value, lang)}</option>)}
         </select></label>
         <LabeledInput label={t.startDate} type="date" value={startDate} min={firstFinancialDate} max={today} required
           onChange={(event) => setStartDate(event.target.value)} />
-        <LabeledInput label={t.opening + ' (' + currency + ')'} {...opening.field} required />
+        <LabeledInput label={t.opening} currency={currency} {...opening.field} required />
         {type === 'deposit' && <>
           <LabeledInput label={t.rate + ' (%)'} name="rate" inputMode="decimal" maxLength={8} required />
           <LabeledInput label={t.maturity} name="maturity" type="date" min={startDate || firstFinancialDate} max={lastFinancialDate} required />
@@ -325,13 +326,15 @@ function AccountHistory({ accountId, userId, lang, refresh, categories, onExpire
       {visible.entries.length === 0 && <p className="finance-empty">{t.noHistory}</p>}
       {visible.entries.map((entry) => {
         const transaction = 'transactionVersion' in entry;
+        const voided = transaction && entry.status === 'void';
         const label = transaction ? categoryLabel(entry.categoryId, categories, lang) : null;
         const title = transaction ? entry.comment || label || t[entry.type] : t[entry.type];
-        const details = [dateLabel(entry.date, lang), transaction && t[entry.type], transaction && entry.status === 'void' && t.void,
+        const details = [dateLabel(entry.date, lang), transaction && t[entry.type], voided && t.void,
           transaction && entry.actorRole === 'admin' && t.admin, !transaction && entry.type === 'adjustment' && entry.explanation]
           .filter(Boolean).join(' · ');
+        const amountClass = entry.type === 'opening' ? 'money' : transactionAmountClass(entry.amountMinor);
         const row = <><span className="history-description"><strong>{title}</strong><span className="muted">{details}</span></span>
-          <span className={`money${transaction && entry.status === 'void' ? ' void-amount' : ''}`}>
+          <span className={voided ? 'money void-amount' : amountClass}>
             {formatMoney(entry.amountMinor, first.currency, lang, true)}</span></>;
         return transaction ? <AdminLink key={entry.id} className="history-row"
           href={adminPaths.transaction(userId, accountId, entry.id)}>{row}</AdminLink>

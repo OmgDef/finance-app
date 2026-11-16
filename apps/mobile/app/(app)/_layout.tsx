@@ -1,5 +1,6 @@
 import { Stack } from 'expo-router';
 import { useAccessSession } from '../../src/access-session';
+import { financeCopy } from '../../src/finance-copy';
 import { FinanceWorkspace } from '../../src/finance-screen';
 import { palette } from '../../src/finance-ui';
 
@@ -13,6 +14,8 @@ export default function FinanceLayout() {
       headerTintColor: palette.accent, headerTitleStyle: { color: palette.ink }, headerBackButtonDisplayMode: 'minimal',
       contentStyle: { backgroundColor: palette.ground }, statusBarStyle: 'dark' }}>
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+      <Stack.Screen name="accounts/[accountId]/cards/[cardId]/details" options={{ title: financeCopy[lang].cardDetails,
+        headerShown: false, presentation: 'fullScreenModal' }} />
     </Stack>
   </FinanceWorkspace>;
 }

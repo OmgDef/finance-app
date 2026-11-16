@@ -27,7 +27,12 @@ const expenseShortcuts = [
   { categoryId: 'travel', title: 'travel', icon: 'travel' },
 ] as const;
 
-const shortcutHeadingLineHeight = 24;
+const featuredCategories = ['groceries', 'transport', 'dining', 'shopping'];
+
+function categoryRank(id: string) {
+  if (featuredCategories.includes(id)) return 0;
+  return id === 'other-expense' ? 2 : 1;
+}
 
 export function PaymentsScreen({ access, lang, accountCount, categories, blocked, focused, refreshSignal, onRecord, onSchedule }: {
   access: FinanceAccess;
@@ -43,15 +48,10 @@ export function PaymentsScreen({ access, lang, accountCount, categories, blocked
   const t = financeCopy[lang];
   const s = scheduleCopy[lang];
   const { width, fontScale } = useWindowDimensions();
-  const [headingLineHeight, setHeadingLineHeight] = useState(0);
   const contentWidth = Math.min(width, styles.page.maxWidth) - styles.page.paddingHorizontal * 2;
-  // iOS can lay out text at the new Dynamic Type size before updating the window font scale.
-  const scaledWidth = contentWidth / Math.max(fontScale, headingLineHeight / shortcutHeadingLineHeight);
-  const shortcutsPerRow = scaledWidth >= 312 ? 3 : scaledWidth >= 240 ? 2 : 1;
-  const shortcutRows = Array.from({ length: Math.ceil(expenseShortcuts.length / shortcutsPerRow) }, (_, index) => {
-    const start = index * shortcutsPerRow;
-    return expenseShortcuts.slice(start, start + shortcutsPerRow);
-  });
+  const stack = contentWidth / fontScale < 260;
+  const expenseCategories = (categories ?? []).filter(({ type }) => type === 'expense')
+    .sort((left, right) => categoryRank(left.id) - categoryRank(right.id));
   const { today, timeZone } = access.profile;
   const [snapshot, setSnapshot] = useState<Snapshot>();
   const [retry, setRetry] = useState(0);
@@ -65,7 +65,7 @@ export function PaymentsScreen({ access, lang, accountCount, categories, blocked
       .then(({ occurrences }) => {
         if (!live || !access.isCurrent()) return;
         const entries = occurrences.filter(({ status }) => status !== 'posted' && status !== 'skipped' && status !== 'paused')
-          .slice(0, 3);
+          .slice(0, 1);
         setSnapshot({ today, timeZone, entries });
       })
       .catch((error) => {
@@ -79,48 +79,39 @@ export function PaymentsScreen({ access, lang, accountCount, categories, blocked
   const month = new Intl.DateTimeFormat(lang === 'ru' ? 'ru-RU' : 'en-US', { month: 'short', timeZone: 'UTC' });
   const entries = active && 'entries' in active ? active.entries : undefined;
 
-  return <>
+  const shortcutsDisabled = blocked || accountCount < 1;
+
+  return <View style={layout.page}>
+    <Text accessibilityRole="header" style={styles.heading}>{s.payments}</Text>
     <View style={layout.section}>
-      <Text accessibilityRole="header" style={[styles.section, layout.shortcutsTitle]}
-        onTextLayout={({ nativeEvent }) => setHeadingLineHeight(nativeEvent.lines[0]?.height ?? 0)}>{t.quickExpenses}</Text>
-      {shortcutRows.map((row) => {
-        const showTiles = row.length > 1;
-        return <View key={row[0].categoryId} style={[layout.section, showTiles && layout.shortcutRow]}>
-          {row.map(({ categoryId, title, icon }) => {
-            const disabled = blocked || accountCount < 1 ||
-              !categories?.some(({ id, type }) => id === categoryId && type === 'expense');
-            return <Pressable key={categoryId} accessibilityRole="button" accessibilityState={{ disabled }} disabled={disabled}
-              testID={'finance-quick-expense-' + categoryId} onPress={() => onRecord('expense', categoryId)}
-              style={({ pressed }) => [layout.shortcut, showTiles && layout.shortcutTile,
-                pressed && layout.shortcutPressed, disabled && styles.dimmed]}>
-              <FinanceIcon name={icon} color={palette.accent} size={25} />
-              <Text style={[styles.title, layout.shortcutTitle]}>{t[title]}</Text>
-            </Pressable>;
-          })}
-        </View>;
-      })}
-    </View>
-    <View style={layout.section}>
-      <Text accessibilityRole="header" style={styles.groupTitle}>{s.newEntry}</Text>
-      <View style={styles.surface}>
+      <View style={[styles.surface, layout.actions, !stack && layout.actionsHorizontal]}>
         {([
-          { kind: 'expense', title: t.expense, icon: 'expense' },
-          { kind: 'income', title: t.income, icon: 'income' },
-          { kind: 'transfer', title: t.newTransfer, icon: 'transfer' },
-        ] as const).map(({ kind, title, icon }, index) => {
+          { kind: 'expense', title: t.expenseEntry, label: t.expense, icon: 'expense' },
+          { kind: 'income', title: t.incomeEntry, label: t.income, icon: 'income' },
+          { kind: 'transfer', title: t.transfer, label: t.newTransfer, icon: 'transfer' },
+        ] as const).map(({ kind, title, label, icon }, index) => {
           const disabled = blocked || accountCount < (kind === 'transfer' ? 2 : 1);
-          return <Pressable key={kind} accessibilityRole="button" accessibilityState={{ disabled }} disabled={disabled}
+          return <Pressable key={kind} accessibilityRole="button" accessibilityLabel={label}
+            accessibilityState={{ disabled }} disabled={disabled}
             testID={'finance-' + kind} onPress={() => onRecord(kind)} style={({ pressed }) => [
-              layout.action, index > 0 && layout.divider, pressed && layout.pressed, disabled && styles.dimmed,
+              layout.action, !stack && layout.actionTile, index === 0 && layout.primaryAction,
+              index > 0 && (stack ? layout.divider : layout.actionDivider), pressed && layout.pressed, disabled && styles.dimmed,
             ]}>
-            <FinanceIcon name={icon} color={index === 0 ? palette.accent : palette.muted} />
+            <FinanceIcon name={icon} color={index === 0 ? palette.accent : palette.ink} />
             <Text style={styles.title}>{title}</Text>
           </Pressable>;
         })}
       </View>
     </View>
     <View style={layout.section}>
-      <Text accessibilityRole="header" style={styles.groupTitle}>{s.schedule}</Text>
+      <View style={layout.sectionHeader}>
+        <Text accessibilityRole="header" style={styles.section}>{s.schedule}</Text>
+        <Pressable accessibilityRole="button" onPress={() => onSchedule()} testID="finance-payments-schedule"
+          style={({ pressed }) => [layout.link, pressed && styles.dimmed]}>
+          <Text style={layout.linkText}>{s.openSchedule}</Text>
+          <FinanceIcon name="chevron" color={palette.accent} size={14} />
+        </Pressable>
+      </View>
       <View style={styles.surface}>
         {!active && <ActivityIndicator style={layout.message} color={palette.accent} accessibilityLabel={t.loading} />}
         {active && 'error' in active && <View style={layout.message}>
@@ -152,23 +143,44 @@ export function PaymentsScreen({ access, lang, accountCount, categories, blocked
           </Pressable>;
         })}
       </View>
-      <View style={layout.scheduleLink}>
-        <FinanceButton title={s.openSchedule} icon="chevron" onPress={() => onSchedule()} testID="finance-payments-schedule" />
-      </View>
     </View>
-  </>;
+    {expenseCategories.length > 0 && <View style={layout.categorySection}>
+      <Text accessibilityRole="header" style={styles.section}>{t.quickExpenses}</Text>
+      <View style={[layout.shortcuts, !stack && layout.shortcutsGrid]}>
+        {expenseCategories.map(({ id, nameRu, nameEn }) => {
+          const shortcut = expenseShortcuts.find(({ categoryId }) => categoryId === id);
+          const title = shortcut ? t[shortcut.title] : lang === 'ru' ? nameRu : nameEn;
+          return <Pressable key={id} accessibilityRole="button" accessibilityState={{ disabled: shortcutsDisabled }}
+            disabled={shortcutsDisabled} testID={'finance-quick-expense-' + id} onPress={() => onRecord('expense', id)}
+            style={({ pressed }) => [styles.surface, layout.shortcut, !stack && layout.shortcutTile,
+              pressed && layout.pressed, shortcutsDisabled && styles.dimmed]}>
+            <FinanceIcon name={shortcut?.icon ?? 'expense'} color={palette.muted} size={19} />
+            <Text style={styles.title}>{title}</Text>
+          </Pressable>;
+        })}
+      </View>
+    </View>}
+  </View>;
 }
 
 const layout = StyleSheet.create({
-  section: { gap: 8 },
-  shortcutsTitle: { lineHeight: shortcutHeadingLineHeight },
-  shortcutRow: { flexDirection: 'row' },
-  shortcut: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: palette.selected,
-    borderRadius: 12, minHeight: 52, paddingHorizontal: 10, paddingVertical: 10 },
-  shortcutTile: { flex: 1, flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'space-between', minHeight: 84 },
-  shortcutPressed: { backgroundColor: palette.line },
-  shortcutTitle: { fontSize: 14 },
-  action: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 12, paddingVertical: 8, minHeight: 49 },
+  page: { gap: 20 },
+  section: { gap: 4 },
+  sectionHeader: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', columnGap: 12 },
+  link: { flexDirection: 'row', alignItems: 'center', gap: 4, minHeight: 44, flexShrink: 1 },
+  linkText: { color: palette.accent, fontSize: 14, fontWeight: '600', flexShrink: 1 },
+  categorySection: { gap: 10 },
+  shortcuts: { gap: 8 },
+  shortcutsGrid: { flexDirection: 'row', flexWrap: 'wrap' },
+  shortcut: { flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 10,
+    minHeight: 48, paddingHorizontal: 12, paddingVertical: 9 },
+  shortcutTile: { flexBasis: '46%', flexGrow: 1 },
+  actions: { overflow: 'hidden' },
+  actionsHorizontal: { flexDirection: 'row' },
+  action: { flexDirection: 'row', alignItems: 'center', gap: 9, paddingHorizontal: 12, paddingVertical: 12, minHeight: 49 },
+  actionTile: { flex: 1, flexDirection: 'column', justifyContent: 'center', minHeight: 75 },
+  primaryAction: { backgroundColor: palette.selected },
+  actionDivider: { borderLeftWidth: StyleSheet.hairlineWidth, borderLeftColor: palette.line },
   divider: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: palette.line },
   pressed: { backgroundColor: palette.ground },
   message: { padding: 12, gap: 8 },
@@ -183,5 +195,4 @@ const layout = StyleSheet.create({
   amount: { color: palette.ink, fontSize: 14, fontWeight: '600', fontVariant: ['tabular-nums'],
     textAlign: 'right', marginLeft: 'auto', flexShrink: 1 },
   income: { color: palette.positive },
-  scheduleLink: { alignItems: 'flex-start' },
 });

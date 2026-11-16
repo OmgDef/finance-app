@@ -1,3 +1,6 @@
+export const cardNetworks = ['visa', 'mastercard', 'mir', 'unionpay'] as const;
+export type CardNetwork = typeof cardNetworks[number];
+
 export const endpoints = {
   health: { method: 'GET', url: '/api/v1/health' },
   support: { method: 'GET', url: '/api/v1/support' },

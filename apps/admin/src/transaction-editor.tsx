@@ -5,7 +5,8 @@ import { formatMoney } from '@teta/contracts/money';
 import { api, errorCode } from './api';
 import type { AdminCommands } from './commands';
 import { financeWords } from './finance-copy';
-import { AccountPicker, BalanceImpact, categoryLabel, dateLabel, Failure, LabeledInput, useAmount, useQuery } from './finance-ui';
+import { AccountPicker, BalanceImpact, categoryLabel, dateLabel, Failure, LabeledInput, transactionAmountClass,
+  useAmount, useQuery } from './finance-ui';
 import type { Account, Category, Session } from './finance-ui';
 
 type History = Result<'adminListTransactionVersions'>;
@@ -70,7 +71,8 @@ export function TransactionEditor({ userId, transactionId, accounts, categories,
         {version.comment && <p>{version.comment}</p>}
         {version.reason && <p><strong>{t.reason}</strong> · {version.reason}</p>}
         {version.movements.map(({ accountId, currency, amountMinor }) => <div className="finance-line" key={accountId}>
-          <span>{name(accountId)}</span><span className="money">{formatMoney(amountMinor, currency, lang, true)}</span>
+          <span>{name(accountId)}</span>
+          <span className={transactionAmountClass(amountMinor)}>{formatMoney(amountMinor, currency, lang, true)}</span>
         </div>)}
       </section>)}
     </div>
@@ -100,6 +102,8 @@ function TransactionForm({ mode, current, type, params, accounts, categories, se
   const operation = useRef<AbortController | undefined>(undefined);
   const mounted = useRef(true);
   const activeAccounts = accounts.filter(({ archived }) => !archived);
+  const sourceAccount = activeAccounts.find((item) => item.accountId === accountId);
+  const destinationAccount = activeAccounts.find((item) => item.accountId === toAccountId);
   const disabled = busy || commands.busy || !commands.ready || !!commands.pending;
 
   useEffect(() => () => { mounted.current = false; operation.current?.abort(); }, []);
@@ -184,11 +188,11 @@ function TransactionForm({ mode, current, type, params, accounts, categories, se
             onChange={(event) => setDate(event.target.value)} />
           <AccountPicker label={type === 'transfer' ? t.debit : t.account} accounts={activeAccounts} value={accountId} onChange={setAccount} />
           <LabeledInput label={type === 'transfer' ? t.sent : t.amount} {...amount.field} required
-            hint={activeAccounts.find((item) => item.accountId === accountId)?.currency} />
+            currency={sourceAccount?.currency} />
           {type === 'transfer' ? <>
             <AccountPicker label={t.credit} accounts={activeAccounts} value={toAccountId} onChange={setToAccount} />
             <LabeledInput label={t.received} {...received.field} required
-              hint={activeAccounts.find((item) => item.accountId === toAccountId)?.currency} />
+              currency={destinationAccount?.currency} />
           </> : <label>{t.category}<select required value={categoryId} onChange={(event) => setCategory(event.target.value)}>
             <option value="" disabled>{t.choose}</option>
             {categories.filter((item) => item.type === type).map(({ id, nameRu, nameEn }) =>

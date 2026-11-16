@@ -778,7 +778,7 @@ test('Finance API against migrated MySQL', async (t) => {
     await summary('200000');
     assert.deepEqual(await list(), []);
 
-    const first = { name: 'Основная', appearance: '#124ABC', lastFour: '0042' };
+    const first = { name: 'Основная', appearance: '#124ABC', lastFour: '0042', network: 'visa' } as const;
     const second = { name: 'Запасная', appearance: '#564321' };
     const [firstResponse, secondResponse] = await Promise.all([
       send(app, 'createAccountCard', first, session, accountId),
@@ -791,7 +791,7 @@ test('Finance API against migrated MySQL', async (t) => {
     assert.notEqual(cardA.cardId, cardB.cardId);
     const balance = { accountId, currency: 'EUR', balanceMinor: '100000' };
     assert.deepEqual(cardA, { cardId: cardA.cardId, ...first, ...balance });
-    assert.deepEqual(cardB, { cardId: cardB.cardId, ...second, lastFour: null, ...balance });
+    assert.deepEqual(cardB, { cardId: cardB.cardId, ...second, lastFour: null, network: null, ...balance });
     assert.deepEqual(new Set(await list()), new Set([cardA, cardB]));
     await summary('200000');
 
@@ -805,7 +805,7 @@ test('Finance API against migrated MySQL', async (t) => {
     };
     assert.deepEqual(await previews(session), [{ accountId, count: 3,
       cards: [cardA, cardB, thirdCard].sort((a, b) => a.cardId.localeCompare(b.cardId)).slice(0, 2)
-        .map(({ cardId, name, appearance, lastFour }) => ({ cardId, name, appearance, lastFour })),
+        .map(({ cardId, name, appearance, lastFour, network }) => ({ cardId, name, appearance, lastFour, network })),
     }]);
     assert.deepEqual(await previews(otherOwner.session), []);
     assert.equal((await send(app, 'deleteAccountCard', undefined, session, accountId, thirdCard.cardId)).statusCode, 200);
@@ -823,6 +823,13 @@ test('Finance API against migrated MySQL', async (t) => {
     const updatedA = { ...cardA, ...edit, ...updatedBalance, lastFour: null };
     assert.deepEqual(edited.json(), updatedA);
     assert.deepEqual(new Set(await list()), new Set([updatedA, updatedB]));
+    const changedNetwork = await send(app, 'updateAccountCard', { ...edit, network: 'mastercard' }, session, accountId, cardA.cardId);
+    assert.equal(changedNetwork.statusCode, 200, changedNetwork.body);
+    assert.deepEqual(changedNetwork.json(), { ...updatedA, network: 'mastercard' });
+    assert.equal((await previews(session))[0].cards.find(({ cardId }) => cardId === cardA.cardId)?.network, 'mastercard');
+    const clearedNetwork = await send(app, 'updateAccountCard', { ...edit, network: null }, session, accountId, cardA.cardId);
+    assert.equal(clearedNetwork.statusCode, 200, clearedNetwork.body);
+    assert.deepEqual(new Set(await list()), new Set([{ ...updatedA, network: null }, updatedB]));
     await summary('190000');
 
     expectError(await send(app, 'listAccountCards', undefined, undefined, accountId), 401, 'SESSION_EXPIRED');

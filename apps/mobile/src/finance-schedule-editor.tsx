@@ -77,7 +77,7 @@ export function ScheduleEditor(props: EditorProps) {
     {props.mode === 'create' &&
       <Choice title={f.account} value={accountId} onChange={setAccount} disabled={disabled} testID="schedule-account"
         options={accounts.filter((item) => !item.archived && (!scopedAccountId || item.accountId === scopedAccountId))
-          .map((item) => ({ id: item.accountId, label: item.name + ' · ' + item.currency }))} />}
+          .map((item) => ({ id: item.accountId, label: item.name }))} />}
     {props.mode !== 'edit' && <>
       <Choice title={t.kind} value={kind} onChange={(next) => { setKind(next); setCategory(''); }} disabled={disabled}
         testID="schedule-kind" options={[{ id: 'expense', label: f.expenseEntry }, { id: 'income', label: f.incomeEntry }]} />
@@ -86,7 +86,7 @@ export function ScheduleEditor(props: EditorProps) {
       <FinanceDateField title={t.first} lang={lang} today={today} value={firstDate} onChange={setFirst}
         min={earliest} disabled={disabled} testID="schedule-first" />
     </>}
-    <FinanceField title={account ? f.amount + ' (' + account.currency + ')' : f.amount}
+    <FinanceField title={f.amount} currency={account?.currency}
       value={amount.text} onChangeText={amount.setText} editable={!disabled} keyboardType="numbers-and-punctuation"
       maxLength={30} testID="schedule-amount" />
     <Choice title={f.category} value={categoryId} onChange={setCategory} disabled={disabled} testID="schedule-category"

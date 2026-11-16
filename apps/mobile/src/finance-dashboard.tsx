@@ -1,17 +1,19 @@
 import { useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import type { StyleProp, ViewStyle } from 'react-native';
 import type { ReactNode } from 'react';
 import type { Language, Result } from '@teta/contracts';
 import { copy } from './copy';
 import { cashFlowSeries, cashFlowWeeks, WeeklyCashFlowPlot } from './finance-cash-flow';
 import { financeCopy } from './finance-copy';
-import { currencies, formatAmount, formatFinancialDate, formatMoney, formatRate } from './finance-format';
+import { currencies, currencyName, currencySymbol, formatFinancialDate, formatMoney, formatRate } from './finance-format';
+import { CardNetworkLogo, cardNetworkLabel } from './finance-card-network';
 import type { Currency } from './finance-format';
 import { FinanceIcon } from './finance-icon';
 import { scheduleCopy } from './finance-schedule-copy';
 import { statisticsCopy } from './finance-statistics-copy';
 import type { StatisticsPreset } from './finance-statistics';
-import { FinanceAlert, palette, styles } from './finance-ui';
+import { cardTextColor, FinanceAlert, palette, styles } from './finance-ui';
 
 type Account = Result<'listAccounts'>['accounts'][number];
 type CardPreview = Result<'listAccounts'>['cardPreviews'][number];
@@ -23,7 +25,7 @@ const labels = {
   ru: {
     switchBalance: 'Показать остаток', annual: 'годовых', matures: 'до', moreCards: 'Другие карточки',
     flow: 'Движение денег', statistics: 'Вся статистика',
-    noFlow: 'За этот период в выбранной валюте нет операций.', flowError: 'Не удалось обновить движение денег.',
+    noFlow: 'Нет операций за 90 дней.', flowError: 'Не удалось обновить движение денег.',
     rates: 'Курсы валют', source: 'Официальные курсы Банка России', ratesError: 'Не удалось обновить курсы валют.',
     cachedRates: 'Показаны сохранённые курсы.', effective: 'Действует с', change: 'К предыдущему курсу',
     history: 'Динамика за 30 дней', nextPayment: 'Ближайший платёж', noPayment: 'Нет запланированных платежей.',
@@ -32,7 +34,7 @@ const labels = {
   en: {
     switchBalance: 'Show balance', annual: 'per year', matures: 'until', moreCards: 'More cards',
     flow: 'Cash flow', statistics: 'View statistics',
-    noFlow: 'No transactions in this currency for the period.', flowError: 'Could not update cash flow.',
+    noFlow: 'No transactions in the last 90 days.', flowError: 'Could not update cash flow.',
     rates: 'Exchange rates', source: 'Official Bank of Russia rates', ratesError: 'Could not update exchange rates.',
     cachedRates: 'Showing saved rates.', effective: 'Effective from', change: 'Since the previous rate',
     history: '30-day history', nextPayment: 'Next payment', noPayment: 'No scheduled payments.',
@@ -47,92 +49,83 @@ export function BalanceCard({ accounts, lang }: { accounts: Account[]; lang: Lan
   const [primary, ...alternatives] = selectedOrder ?? [defaultCurrency, ...currencies.filter((currency) => currency !== defaultCurrency)];
   const totals: Record<Currency, bigint> = { RUB: 0n, USD: 0n, EUR: 0n };
   for (const { currency, balanceMinor } of accounts) totals[currency] += BigInt(balanceMinor);
-  const amount = (currency: Currency) => formatAmount(String(totals[currency]), lang);
+  const amount = (currency: Currency) => formatMoney(String(totals[currency]), currency, lang);
   const stack = (Math.min(width, 540) - 74) / fontScale < 218 ||
     alternatives.some((currency) => amount(currency).length > 16);
 
   return <View style={layout.balanceCard} testID="finance-dashboard-balances">
     <Text accessibilityRole="header" style={layout.balanceTitle}>{financeCopy[lang].balances}</Text>
-    <View style={layout.mainBalance} accessible accessibilityLiveRegion="polite"
-      accessibilityLabel={amount(primary) + ' ' + primary} testID="finance-dashboard-main-balance">
-      <Text style={layout.balanceValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.35}>{amount(primary)}</Text>
-      <Text style={layout.balanceUnit}>{primary}</Text>
-    </View>
+    <Text style={layout.balanceValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.35}
+      accessibilityLiveRegion="polite" testID="finance-dashboard-main-balance">{amount(primary)}</Text>
     <View style={[layout.balanceChoices, stack && layout.balanceChoicesStacked]}>
       {alternatives.map((currency, index) => <Pressable key={index} accessibilityRole="button"
-        accessibilityLabel={labels[lang].switchBalance + ' · ' + amount(currency) + ' ' + currency}
+        accessibilityLabel={labels[lang].switchBalance + ' · ' + amount(currency)}
         testID={'finance-dashboard-balance-' + currency}
         onPress={() => setSelectedOrder([currency, ...alternatives.map((other) => other === currency ? primary : other)])}
         style={({ pressed }) => [layout.balanceChoice, !stack && layout.balanceChoiceColumn, pressed && layout.balanceChoicePressed]}>
-        <View style={layout.balanceChoiceHeader}>
-          <Text style={layout.balanceUnit}>{currency}</Text>
-          <FinanceIcon name="chevron" color={palette.selected} size={13} />
-        </View>
         <Text style={layout.balanceChoiceValue}>{amount(currency)}</Text>
+        <FinanceIcon name="chevron" color={palette.selected} size={13} />
       </Pressable>)}
     </View>
   </View>;
 }
 
-const currencySigns: Record<Currency, string> = { RUB: '₽', USD: '$', EUR: '€' };
-
-function cardTextColor(color: string) {
-  const channels = [1, 3, 5].map((offset) => parseInt(color.slice(offset, offset + 2), 16) / 255)
-    .map((value) => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
-  const luminance = 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
-  return luminance > 0.179 ? '#000000' : palette.panel;
-}
-
-export function OverviewAccountCard({ account, preview, lang, onOpen }: {
-  account: Account; preview?: CardPreview; lang: Language; onOpen(): void;
+export function OverviewAccountCard({ account, preview, lang, divider, onOpen }: {
+  account: Account; preview?: CardPreview; lang: Language; divider: boolean; onOpen(): void;
 }) {
   const t = financeCopy[lang];
   const words = labels[lang];
   const type = 'type' in account ? account.type : 'regular';
-  const amount = formatAmount(account.balanceMinor, lang);
+  const amount = formatMoney(account.balanceMinor, account.currency, lang);
   const terms = 'type' in account && account.type === 'deposit'
     ? formatRate(account.annualRatePercent, lang) + '% ' + words.annual + ' · ' + words.matures + ' ' +
       formatFinancialDate(account.maturityDate, lang)
     : undefined;
   const cardSummary = preview && [
-    ...preview.cards.map(({ name, lastFour }) => lastFour ? name + ' · ' + lastFour : name),
+    ...preview.cards.map(({ name, lastFour, network }) => [name, cardNetworkLabel(network, lang), lastFour].filter(Boolean).join(' · ')),
     ...(preview.count > preview.cards.length ? [words.moreCards + ': ' + (preview.count - preview.cards.length)] : []),
   ].join(', ');
-  const label = [account.name, amount + ' ' + account.currency, t[type], terms,
+  const label = [account.name, amount, t[type], terms,
     account.needsReconciliation && t.needsReconciliation, cardSummary].filter(Boolean).join(', ');
   return <Pressable accessibilityRole="button" accessibilityLabel={label} testID={'finance-account-' + account.accountId}
-    onPress={onOpen} style={({ pressed }) => [layout.overviewAccount, pressed && layout.overviewAccountPressed]}>
-    <View style={[layout.accountIcon, type !== 'regular' && layout.accountTypeIcon]}
-      accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
-      {type === 'regular'
-        ? <Text allowFontScaling={false} style={layout.accountSign}>{currencySigns[account.currency]}</Text>
-        : <FinanceIcon name={type} color={palette.muted} size={20} />}
+    onPress={onOpen} style={({ pressed }) => [layout.overviewAccount, divider && layout.rowDivider, pressed && layout.overviewAccountPressed]}>
+    <View style={layout.accountLine}>
+      <View style={layout.accountIdentity}>
+        <FinanceIcon name={type === 'regular' ? 'wallet' : type} color={palette.muted} size={18} />
+        <Text style={styles.title}>{account.name}</Text>
+      </View>
+      <View style={layout.accountValue}>
+        <Text style={layout.accountAmount}>{amount}</Text>
+        <FinanceIcon name="chevron" color={palette.muted} size={13} />
+      </View>
     </View>
-    <View style={layout.accountInfo}>
-      <Text style={layout.accountAmount}>{amount}{' '}<Text style={layout.accountUnit}>{account.currency}</Text></Text>
-      <Text style={layout.accountName}>{account.name}</Text>
-      {terms && <Text style={styles.meta}>{terms}</Text>}
-      {account.needsReconciliation && <Text style={styles.meta}>{t.needsReconciliation}</Text>}
-      {preview && <View style={layout.linkedCards}>
-        {preview.cards.map(({ cardId, appearance, lastFour }) => {
-          const color = cardTextColor(appearance);
-          return <View key={cardId} style={[layout.linkedCard, { backgroundColor: appearance }]}>
-            {lastFour
-              ? <Text style={[layout.linkedDigits, { color }]}>•• {lastFour}</Text>
-              : <FinanceIcon name="card" color={color} size={14} />}
-          </View>;
-        })}
-        {preview.count > preview.cards.length && <Text style={layout.linkedCount}>+{preview.count - preview.cards.length}</Text>}
-      </View>}
-    </View>
-    <View style={layout.accountChevron}><FinanceIcon name="chevron" color={palette.muted} size={14} /></View>
+    {terms && <Text style={[styles.meta, layout.accountDetail]}>{terms}</Text>}
+    {account.needsReconciliation && <Text style={[styles.meta, layout.accountDetail]}>{t.needsReconciliation}</Text>}
+    {preview && <View style={layout.linkedCards}>
+      {preview.cards.map(({ cardId, appearance, lastFour, name, network }) => {
+        const color = cardTextColor(appearance);
+        const contactColor = color + '73';
+        return <View key={cardId} style={[layout.linkedCard, { backgroundColor: appearance }]}>
+          {network && <View style={layout.linkedCardTop}>
+            <View style={[layout.linkedCardChip, { backgroundColor: color + '26', borderColor: contactColor }]}>
+              <View style={[layout.linkedCardContacts, { borderColor: contactColor }]} />
+            </View>
+            <CardNetworkLogo network={network} appearance={appearance} style={layout.linkedCardLogo} />
+          </View>}
+          {(!network || lastFour) && <Text style={[layout.linkedCardCaption, { color }]} numberOfLines={1} maxFontSizeMultiplier={1.4}>
+            {lastFour ? '•• ' + lastFour : name}
+          </Text>}
+        </View>;
+      })}
+      {preview.count > preview.cards.length && <Text style={layout.linkedCount}>+{preview.count - preview.cards.length}</Text>}
+    </View>}
   </Pressable>;
 }
 
-function Card({ title, detail, action, testID, children }: {
-  title: string; detail?: string; action?: ReactNode; testID: string; children: ReactNode;
+function Card({ title, detail, action, style, testID, children }: {
+  title: string; detail?: string; action?: ReactNode; style?: StyleProp<ViewStyle>; testID: string; children: ReactNode;
 }) {
-  return <View style={[styles.surface, layout.card]} testID={testID}>
+  return <View style={[styles.surface, layout.card, style]} testID={testID}>
     <View style={layout.cardHeader}>
       <View style={layout.labels}>
         <Text accessibilityRole="header" style={styles.section}>{title}</Text>
@@ -186,10 +179,10 @@ export function CashFlowCard({ read, accounts, lang, onStatistics }: {
           setSelected(code);
         }} testID={'finance-dashboard-flow-' + code}
         style={({ pressed }) => [layout.currencyOption, code === currency && layout.selectedCurrency, pressed && styles.dimmed]}>
-        <Text style={[layout.currencyText, code === currency && layout.selectedCurrencyText]}>{code}</Text>
+        <Text style={[layout.currencyText, code === currency && layout.selectedCurrencyText]}>{currencyName(code, lang)}</Text>
       </Pressable>)}
     </View>
-    {report?.weeks && <>
+    {report && (total ? <>
       <View style={layout.metrics}>
         {cashFlowSeries.map(({ field, label, color }) => <View key={field} style={layout.metric}>
           <View style={layout.legend}>
@@ -199,16 +192,16 @@ export function CashFlowCard({ read, accounts, lang, onStatistics }: {
           <Text style={layout.metricValue}>{formatMoney(total?.[field] ?? '0', currency, lang)}</Text>
         </View>)}
       </View>
-      <WeeklyCashFlowPlot weeks={weeks} currency={currency} lang={lang} overview
-        selection={{ index: weekIndex, onSelect: (index) => setSelectedWeek(index === weekIndex ? undefined : weeks[index].fromDate) }} />
+      {weeks.length > 0 && <WeeklyCashFlowPlot weeks={weeks} currency={currency} lang={lang} overview
+        selection={{ index: weekIndex, onSelect: (index) => setSelectedWeek(index === weekIndex ? undefined : weeks[index].fromDate) }} />}
       {week ? <View style={layout.weekDetails} testID="finance-dashboard-week-details" accessibilityLiveRegion="polite">
         <Text style={styles.groupTitle}>{formatFinancialDate(week.fromDate, lang)} – {formatFinancialDate(week.throughDate, lang)}</Text>
         {cashFlowSeries.map(({ field, label }) => <View key={field} style={layout.weekMetric}>
           <Text style={styles.meta}>{s[label]}</Text>
           <Text style={styles.title}>{formatMoney(week[field], currency, lang)}</Text>
         </View>)}
-      </View> : !total && <Text style={styles.meta}>{t.noFlow}</Text>}
-    </>}
+      </View> : null}
+    </> : <Text style={styles.meta}>{t.noFlow}</Text>)}
     <ReadStatus read={read} lang={lang} message={t.flowError} />
   </Card>;
 }
@@ -248,16 +241,17 @@ export function ExchangeRatesCard({ read, lang }: { read: Read<Result<'getExchan
   });
   return <Card title={t.rates} detail={t.source} testID="finance-dashboard-rates">
     {(read.data?.rates ?? [{ currency: 'USD' }, { currency: 'EUR' }] as const).map((quote, index) => {
-      const pair = quote.currency + '/RUB';
-      return <View key={pair} style={[layout.rateRow, index > 0 && layout.rowDivider]}>
+      const ruble = '\u00a0' + currencySymbol('RUB');
+      return <View key={quote.currency} style={[layout.rateRow, index > 0 && layout.rowDivider]}>
         <View style={layout.rateDetails}>
-          <Text style={styles.title}>{pair}</Text>
-          <Text style={layout.metricValue}>{'current' in quote ? number.format(Number(quote.current.rate)) : '—'}</Text>
+          <Text style={styles.title}>{currencyName(quote.currency, lang)}</Text>
+          <Text style={layout.metricValue}>{'current' in quote
+            ? '1\u00a0' + currencySymbol(quote.currency) + ' = ' + number.format(Number(quote.current.rate)) + ruble : '—'}</Text>
           {'current' in quote && <Text style={styles.meta}>
             {t.effective} {formatFinancialDate(quote.current.date, lang)}
           </Text>}
           {'previous' in quote && quote.previous && <Text style={styles.meta}>
-            {t.change} {delta.format(Number((Number(quote.current.rate) - Number(quote.previous.rate)).toFixed(4)))}
+            {t.change} {delta.format(Number((Number(quote.current.rate) - Number(quote.previous.rate)).toFixed(4)))}{ruble}
           </Text>}
         </View>
         {'history' in quote && quote.history.length > 1 && <View style={layout.trend}>
@@ -278,54 +272,50 @@ export function NextPaymentCard({ read, categories, lang, onSchedule }: {
   const payment = read.data?.payment;
   const category = categories?.find(({ id }) => id === payment?.categoryId);
   const title = payment?.comment || (category && (lang === 'ru' ? category.nameRu : category.nameEn)) || financeCopy[lang].expenseEntry;
-  return <Card title={t.nextPayment} testID="finance-dashboard-next-payment">
+  return <Card title={t.nextPayment} style={layout.nextPaymentCard} testID="finance-dashboard-next-payment"
+    action={<CardLink title={t.schedule} onPress={() => onSchedule()} />}>
     {payment ? <Pressable accessibilityRole="button" onPress={() => onSchedule(payment.ruleId, payment.date)}
       style={({ pressed }) => [layout.payment, pressed && styles.dimmed]}>
-      <View style={layout.paymentDate}>
-        <FinanceIcon name="calendar" size={17} color={palette.accent} />
-        <Text style={layout.linkText}>{formatFinancialDate(payment.date, lang)}</Text>
-      </View>
-      <View style={layout.paymentContent}>
+      <View style={layout.paymentIdentity}>
         <Text style={styles.title}>{title}</Text>
-        <Text style={layout.metricValue}>{formatMoney('-' + payment.amountMinor, payment.currency, lang)}</Text>
+        <Text style={styles.meta}>{formatFinancialDate(payment.date, lang)}</Text>
+        {payment.status !== 'planned' && <Text style={styles.meta}>{scheduleCopy[lang][payment.status]}</Text>}
       </View>
-      {payment.status !== 'planned' && <Text style={styles.meta}>{scheduleCopy[lang][payment.status]}</Text>}
+      <Text style={[layout.metricValue, layout.paymentAmount]}>{formatMoney('-' + payment.amountMinor, payment.currency, lang)}</Text>
+      <FinanceIcon name="chevron" color={palette.muted} size={13} />
     </Pressable> : read.data && <Text style={styles.meta}>{t.noPayment}</Text>}
     <ReadStatus read={read} lang={lang} message={t.paymentError} />
-    <CardLink title={t.schedule} onPress={() => onSchedule()} />
   </Card>;
 }
 
 const layout = StyleSheet.create({
-  balanceCard: { backgroundColor: palette.accent, borderRadius: 20, padding: 18 },
-  balanceTitle: { color: palette.selected, fontSize: 14, fontWeight: '600' },
-  mainBalance: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'baseline', columnGap: 9, marginTop: 6, marginBottom: 16 },
-  balanceValue: { color: palette.panel, fontSize: 42, fontWeight: '700', letterSpacing: -1.3,
-    fontVariant: ['tabular-nums'], flexShrink: 1, maxWidth: '100%' },
-  balanceUnit: { color: palette.selected, fontSize: 12, fontWeight: '600' },
-  balanceChoices: { flexDirection: 'row', gap: 8, paddingTop: 11, borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: 'rgba(255,255,255,0.34)' },
+  balanceCard: { backgroundColor: palette.balanceSurface, borderRadius: 20, padding: 18 },
+  balanceTitle: { color: palette.balanceMuted, fontSize: 14, fontWeight: '600' },
+  balanceValue: { color: palette.panel, fontSize: 40, fontWeight: '600', letterSpacing: -1.2,
+    fontVariant: ['tabular-nums'], flexShrink: 1, maxWidth: '100%', marginTop: 6, marginBottom: 11 },
+  balanceChoices: { flexDirection: 'row', gap: 8, paddingTop: 5, borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: 'rgba(255,255,255,0.24)' },
   balanceChoicesStacked: { flexDirection: 'column' },
-  balanceChoice: { backgroundColor: 'rgba(255,255,255,0.10)', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 7,
-    minHeight: 50, justifyContent: 'center', gap: 2 },
+  balanceChoice: { flexDirection: 'row', alignItems: 'center', borderRadius: 8, paddingHorizontal: 4, paddingVertical: 5,
+    minHeight: 44, gap: 6 },
   balanceChoiceColumn: { flex: 1 },
   balanceChoicePressed: { backgroundColor: 'rgba(255,255,255,0.20)' },
-  balanceChoiceHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  balanceChoiceValue: { color: palette.panel, fontSize: 16, fontWeight: '700', fontVariant: ['tabular-nums'] },
-  overviewAccount: { ...styles.surface, borderRadius: 16, flexDirection: 'row', columnGap: 11, padding: 13, alignItems: 'flex-start' },
+  balanceChoiceValue: { color: palette.panel, fontSize: 16, fontWeight: '600', fontVariant: ['tabular-nums'], flexShrink: 1 },
+  overviewAccount: { gap: 4, paddingHorizontal: 13, paddingVertical: 10, minHeight: 53, justifyContent: 'center' },
   overviewAccountPressed: { backgroundColor: palette.raised },
-  accountIcon: { backgroundColor: palette.selected, borderRadius: 21, width: 42, height: 42,
-    justifyContent: 'center', alignItems: 'center' },
-  accountTypeIcon: { backgroundColor: palette.raised },
-  accountSign: { fontSize: 22, color: palette.accent, fontWeight: '600' },
-  accountInfo: { flex: 1, gap: 2 },
-  accountAmount: { color: palette.ink, fontSize: 22, fontWeight: '700', fontVariant: ['tabular-nums'] },
-  accountUnit: { color: palette.muted, fontSize: 12, fontWeight: '600' },
-  accountName: { color: palette.muted, fontSize: 14 },
-  accountChevron: { alignSelf: 'center' },
-  linkedCards: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginTop: 6 },
-  linkedCard: { borderRadius: 6, minWidth: 53, minHeight: 32, padding: 5, justifyContent: 'flex-end' },
-  linkedDigits: { fontSize: 11, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  accountLine: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 },
+  accountIdentity: { flexDirection: 'row', alignItems: 'center', flexGrow: 1, flexBasis: '45%', minWidth: 112, gap: 9 },
+  accountValue: { marginLeft: 'auto', maxWidth: '100%', flexDirection: 'row', alignItems: 'center', gap: 7 },
+  accountAmount: { color: palette.ink, fontSize: 17, fontWeight: '600', fontVariant: ['tabular-nums'], flexShrink: 1, textAlign: 'right' },
+  accountDetail: { marginLeft: 27 },
+  linkedCards: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginLeft: 27, marginTop: 4 },
+  linkedCard: { width: 76, aspectRatio: 1.586, maxWidth: '100%', borderRadius: 6, padding: 5,
+    borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(23,38,58,0.15)' },
+  linkedCardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  linkedCardChip: { width: 13, height: 10, borderRadius: 2, borderWidth: StyleSheet.hairlineWidth, alignItems: 'center' },
+  linkedCardContacts: { width: 5, flex: 1, borderLeftWidth: StyleSheet.hairlineWidth, borderRightWidth: StyleSheet.hairlineWidth },
+  linkedCardLogo: { width: 26, height: 15 },
+  linkedCardCaption: { marginTop: 'auto', fontSize: 11, fontWeight: '700', fontVariant: ['tabular-nums'] },
   linkedCount: { color: palette.muted, fontSize: 12, paddingLeft: 2 },
   card: { borderRadius: 20, padding: 17, gap: 10 },
   cardHeader: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', columnGap: 10 },
@@ -353,7 +343,8 @@ const layout = StyleSheet.create({
   spark: { width: sparkWidth, height: sparkHeight },
   sparkGuide: { position: 'absolute', left: 0, right: 0, bottom: 0, height: StyleSheet.hairlineWidth, backgroundColor: palette.line },
   segment: { position: 'absolute', height: 2, borderRadius: 1, backgroundColor: palette.accent },
-  payment: { minHeight: 44, backgroundColor: palette.raised, borderRadius: 10, padding: 12, gap: 8 },
-  paymentDate: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  paymentContent: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'baseline', gap: 6 },
+  nextPaymentCard: { paddingTop: 7 },
+  payment: { minHeight: 44, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 7 },
+  paymentIdentity: { flexGrow: 1, flexBasis: '42%', minWidth: 100, gap: 3 },
+  paymentAmount: { flexShrink: 1, marginLeft: 'auto', textAlign: 'right' },
 });

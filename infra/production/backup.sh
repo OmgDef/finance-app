@@ -15,7 +15,8 @@ gpg_options=(--no-options --homedir "$staging/gnupg" --batch --no-symkey-cache
 
 docker compose exec -T db sh -eu -c '
   export MYSQL_PWD="$MYSQL_PASSWORD"
-  exec mysqldump --single-transaction --quick --no-tablespaces --set-gtid-purged=OFF +    --hex-blob --skip-dump-date --skip-add-drop-table -u "$MYSQL_USER" "$MYSQL_DATABASE"
+  exec mysqldump --single-transaction --quick --no-tablespaces --set-gtid-purged=OFF \
+    --hex-blob --skip-dump-date --skip-add-drop-table -u "$MYSQL_USER" "$MYSQL_DATABASE"
 ' | gpg "${gpg_options[@]}" --symmetric --cipher-algo AES256 --output "$staging/teta.sql.gpg"
 gpg "${gpg_options[@]}" --decrypt "$staging/teta.sql.gpg" >/dev/null
 rm -r -- "$staging/gnupg"

@@ -142,7 +142,7 @@ export function ReconciliationEditor({ account, userId, today, categories, lang,
         <div className="finance-line"><span>{t.balance}</span><strong className="money">{snapshot
           ? formatMoney(snapshot.balanceMinor, account.currency, lang) : '—'}</strong></div>
         <div className="finance-form-grid">
-          <LabeledInput label={`${t.actual} (${account.currency})`} {...actual.field} required />
+          <LabeledInput label={t.actual} currency={account.currency} {...actual.field} required />
           <label>{t.reconciliationReason}<textarea required maxLength={500} rows={2} value={explanation}
             onChange={(event) => setExplanation(event.target.value)} /></label>
         </div>

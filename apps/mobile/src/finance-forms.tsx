@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import type { ReactNode } from 'react';
+import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { KeyboardController } from 'react-native-keyboard-controller';
 import type { Language, Result } from '@teta/contracts';
 import type { FinanceDraft, TransactionFields } from './finance-commands';
@@ -7,10 +8,12 @@ import { financeCopy } from './finance-copy';
 import type { FinanceCopyKey } from './finance-copy';
 import { FinanceDateField } from './finance-date-field';
 import {
-  amountInMinorUnits, currencies, depositRate, formatAmount, formatRate, formatTransferRate,
+  amountInMinorUnits, currencies, currencyName, currencySymbol, depositRate, formatAmount, formatRate, formatTransferRate,
+  formatFinancialDate,
 } from './finance-format';
 import type { Currency } from './finance-format';
-import { Choice, FinanceAlert, FinanceButton, FinanceField, styles as uiStyles } from './finance-ui';
+import { FinanceIcon } from './finance-icon';
+import { Choice, FinanceAlert, FinanceButton, FinanceField, palette, styles as uiStyles } from './finance-ui';
 
 type Account = Result<'listAccounts'>['accounts'][number];
 type Category = Result<'listCategories'>['categories'][number];
@@ -66,9 +69,9 @@ export function AccountForm({ lang, today, disabled, onSubmit }: Props & { today
       .map((id) => ({ id, label: t[id] }))} onChange={setKind} disabled={disabled} testID="finance-account-type" />
     <FinanceField title={t.accountName} value={name} onChangeText={setName} editable={!disabled} maxLength={255}
       testID="finance-account-name" />
-    <Choice title={t.currency} value={currency} options={currencies.map((id) => ({ id, label: id }))}
+    <Choice title={t.currency} value={currency} options={currencies.map((id) => ({ id, label: currencyName(id, lang) }))}
       onChange={setCurrency} disabled={disabled} testID="finance-account-currency" />
-    <FinanceField title={t.opening + ' (' + currency + ')'} value={opening.text} onChangeText={opening.setText} editable={!disabled}
+    <FinanceField title={t.opening} currency={currency} value={opening.text} onChangeText={opening.setText} editable={!disabled}
       keyboardType="numbers-and-punctuation" maxLength={30} testID="finance-account-opening" />
     <FinanceDateField title={t.startDate} lang={lang} today={today} value={startDate} onChange={setStart} max={today}
       disabled={disabled} testID="finance-account-date" />
@@ -85,10 +88,17 @@ export function AccountForm({ lang, today, disabled, onSubmit }: Props & { today
 
 type TransactionKind = TransactionFields['type'];
 
-export function TransactionForm({ lang, today, disabled, onSubmit, accounts, categories, selectedAccountId, kind, initial, defaultCategoryId }: {
+type QuickLayout = (form: ReactNode, footer: ReactNode) => ReactNode;
+
+function quickAmountInMinorUnits(text: string) {
+  return amountInMinorUnits(text.trim().replaceAll(',', '.').replace(/^\./, '0.'), 'en');
+}
+
+export function TransactionForm({ lang, today, disabled, onSubmit, accounts, categories, selectedAccountId, kind, initial,
+  defaultCategoryId, renderQuickLayout }: {
   lang: Language; today: string; disabled: boolean; onSubmit: (fields: TransactionFields) => void; accounts: Account[];
   categories: Category[]; selectedAccountId: string | null; kind: TransactionKind; initial?: TransactionFields;
-  defaultCategoryId?: string;
+  defaultCategoryId?: string; renderQuickLayout?: QuickLayout;
 }) {
   const t = financeCopy[lang];
   const [accountId, setAccountId] = useState(() => initial
@@ -102,13 +112,15 @@ export function TransactionForm({ lang, today, disabled, onSubmit, accounts, cat
   });
   const amount = useLocalizedInput(lang, initial ? formatAmount(
     initial.type === 'transfer' ? initial.fromAmountMinor : initial.amountMinor, lang,
-  ) : '', amountInMinorUnits, formatAmount);
+  ) : '', renderQuickLayout ? quickAmountInMinorUnits : amountInMinorUnits,
+  renderQuickLayout ? (value) => formatAmount(value, 'en').replaceAll(',', '') : formatAmount);
   const received = useLocalizedInput(lang, initial?.type === 'transfer'
     ? formatAmount(initial.toAmountMinor, lang) : '', amountInMinorUnits, formatAmount);
   const [date, setDate] = useState<string>();
   const operationDate = date ?? initial?.date ?? today;
   const [comment, setComment] = useState(initial?.comment ?? '');
   const [error, setError] = useState<FinanceCopyKey>();
+  const [expanded, setExpanded] = useState<'account' | 'category' | 'details'>();
   const account = accounts.find((entry) => entry.accountId === accountId);
   const isTransfer = kind === 'transfer';
   const destination = isTransfer ? accounts.find((entry) => entry.accountId === toAccountId) : undefined;
@@ -118,7 +130,7 @@ export function TransactionForm({ lang, today, disabled, onSubmit, accounts, cat
   const rate = crossCurrency && amount.value && received.value
     ? formatTransferRate(amount.value, received.value, account.currency, destination.currency, lang) : undefined;
   const prefix = 'finance-' + kind;
-  const accountOptions = accounts.map((entry) => ({ id: entry.accountId, label: entry.name + ' · ' + entry.currency }));
+  const accountOptions = accounts.map(({ accountId, name }) => ({ id: accountId, label: name }));
   const categoryOptions = categories.filter((category) => category.type === kind);
   const submitTitle = initial ? t.saveChanges : {
     expense: t.submitExpense, income: t.submitIncome, transfer: t.submitTransfer,
@@ -126,7 +138,7 @@ export function TransactionForm({ lang, today, disabled, onSubmit, accounts, cat
 
   function submit() {
     if (disabled) return;
-    void KeyboardController.dismiss();
+    if (!renderQuickLayout) void KeyboardController.dismiss();
     if (!account) return setError('unavailable');
     const amountMinor = amount.value;
     if (amountMinor === undefined) return setError('invalidAmount');
@@ -144,8 +156,66 @@ export function TransactionForm({ lang, today, disabled, onSubmit, accounts, cat
       return;
     }
     if (!categoryOptions.some(({ id }) => id === categoryId)) return setError(kind === 'income' ? 'chooseIncomeCategory' : 'chooseCategory');
+    if (renderQuickLayout) void KeyboardController.dismiss();
     setError(undefined);
     onSubmit({ ...fields, type: kind, accountId, amountMinor, categoryId });
+  }
+
+  const dateField = <FinanceDateField title={t.date} lang={lang} today={today} value={operationDate} onChange={setDate}
+    min={earliestDate} disabled={disabled} testID={prefix + '-date'} />;
+  const commentField = <FinanceField title={t.comment} value={comment} onChangeText={setComment} editable={!disabled} maxLength={500}
+    multiline testID={prefix + '-comment'} />;
+  const submitButton = <FinanceButton title={submitTitle} onPress={submit} primary disabled={disabled} testID="finance-submit" />;
+  const localizedCategories = categoryOptions.map((category) => ({ id: category.id, label: lang === 'ru' ? category.nameRu : category.nameEn }));
+
+  if (renderQuickLayout) {
+    const amountError = error === 'invalidAmount' || error === 'positiveAmount';
+    function toggle(field: typeof expanded) {
+      void KeyboardController.dismiss();
+      setExpanded(expanded === field ? undefined : field);
+    }
+    function choose(update: (value: string) => void, value: string) {
+      update(value);
+      setExpanded(undefined);
+    }
+    return renderQuickLayout(<View style={styles.quickForm}>
+      <View style={styles.amountGroup}>
+        <Text style={uiStyles.label}>{t.amount}</Text>
+        <View style={[uiStyles.surface, styles.amountBox, amountError && styles.amountError]}>
+          <TextInput editable={!disabled} keyboardType="decimal-pad"
+            style={[styles.amountText, styles.amountInput]} value={amount.text} onChangeText={(value) => {
+              amount.setText(value);
+              if (amountError) setError(undefined);
+            }}
+            placeholder={formatAmount('0', lang)} placeholderTextColor={palette.muted} selectionColor={palette.accent}
+            maxLength={30} accessibilityLabel={account ? `${t.amount} (${currencySymbol(account.currency)})` : t.amount}
+            testID={prefix + '-amount'} />
+          {account && <Text style={styles.amountText} accessible={false} importantForAccessibility="no">{currencySymbol(account.currency)}</Text>}
+        </View>
+        {amountError && <FinanceAlert testID={prefix + '-amount-error'}>{t[error]}</FinanceAlert>}
+      </View>
+      <View style={[uiStyles.surface, styles.quickFields]}>
+        <QuickField title={t.account} value={accountOptions.find(({ id }) => id === accountId)?.label}
+          expanded={expanded === 'account'} disabled={disabled} onPress={() => toggle('account')} testID={prefix + '-account'}>
+          <QuickOptions options={accountOptions} selected={accountId} disabled={disabled}
+            onSelect={(id) => choose(setAccountId, id)} testID={prefix + '-account'} />
+        </QuickField>
+        <View style={styles.fieldDivider}>
+          <QuickField title={t.category} value={localizedCategories.find(({ id }) => id === categoryId)?.label}
+            expanded={expanded === 'category'} disabled={disabled} onPress={() => toggle('category')} testID={prefix + '-category'}>
+            <QuickOptions options={localizedCategories} selected={categoryId} disabled={disabled}
+              onSelect={(id) => choose(setCategoryId, id)} testID={prefix + '-category'} />
+          </QuickField>
+        </View>
+        <View style={styles.fieldDivider}>
+          <QuickField title={t.dateAndNote} value={formatFinancialDate(operationDate, lang)} expanded={expanded === 'details'}
+            disabled={disabled} onPress={() => toggle('details')} testID={prefix + '-details'}>
+            <View style={styles.detailFields}>{dateField}{commentField}</View>
+          </QuickField>
+        </View>
+      </View>
+      {error && !amountError && <FinanceAlert>{t[error]}</FinanceAlert>}
+    </View>, submitButton);
   }
 
   const amountLabel = crossCurrency ? t.debitAmount : t.amount;
@@ -157,26 +227,71 @@ export function TransactionForm({ lang, today, disabled, onSubmit, accounts, cat
       }} disabled={disabled} options={accountOptions} testID={prefix + (isTransfer ? '-from' : '-account')} />
     {isTransfer && <Choice title={t.toAccount} value={toAccountId} onChange={setToAccountId} disabled={disabled}
       options={accountOptions.filter(({ id }) => id !== accountId)} testID={prefix + '-to'} />}
-    <FinanceField title={account ? amountLabel + ' (' + account.currency + ')' : amountLabel}
+    <FinanceField title={amountLabel} currency={account?.currency}
       value={amount.text} onChangeText={amount.setText} editable={!disabled} keyboardType="numbers-and-punctuation" maxLength={30}
       testID={prefix + (isTransfer ? '-from-amount' : '-amount')} />
-    {crossCurrency && <FinanceField title={t.creditAmount + ' (' + destination.currency + ')'}
+    {crossCurrency && <FinanceField title={t.creditAmount} currency={destination.currency}
       value={received.text} onChangeText={received.setText} editable={!disabled}
       keyboardType="numbers-and-punctuation" maxLength={30} testID={prefix + '-to-amount'} />}
     {rate && <View style={styles.rate}>
       <Text style={uiStyles.meta}>{t.transferRate}</Text>
       <Text style={uiStyles.value} testID="finance-transfer-rate">{rate}</Text>
     </View>}
-    <FinanceDateField title={t.date} lang={lang} today={today} value={operationDate} onChange={setDate}
-      min={earliestDate} disabled={disabled} testID={prefix + '-date'} />
+    {dateField}
     {!isTransfer && <Choice title={t.category} value={categoryId} onChange={setCategoryId} disabled={disabled}
-      options={categoryOptions.map((category) => ({ id: category.id, label: lang === 'ru' ? category.nameRu : category.nameEn }))}
+      options={localizedCategories}
       testID={prefix + '-category'} />}
-    <FinanceField title={t.comment} value={comment} onChangeText={setComment} editable={!disabled} maxLength={500}
-      multiline testID={prefix + '-comment'} />
+    {commentField}
     {error && <FinanceAlert>{t[error]}</FinanceAlert>}
-    <FinanceButton title={submitTitle} onPress={submit} primary disabled={disabled} testID="finance-submit" />
+    {submitButton}
   </View>;
 }
 
-const styles = StyleSheet.create({ form: { gap: 16 }, rate: { gap: 4 } });
+function QuickField({ title, value, expanded, disabled, onPress, testID, children }: {
+  title: string; value?: string; expanded: boolean; disabled: boolean; onPress(): void; testID: string; children: ReactNode;
+}) {
+  return <>
+    <Pressable accessibilityRole="button" accessibilityLabel={title} accessibilityValue={value ? { text: value } : undefined}
+      accessibilityState={{ expanded, disabled }} disabled={disabled} onPress={onPress} testID={testID}
+      style={({ pressed }) => [styles.quickField, pressed && styles.optionPressed, disabled && uiStyles.dimmed]}>
+      <Text style={styles.quickLabel}>{title}</Text>
+      {value && <Text style={styles.quickValue}>{value}</Text>}
+      <FinanceIcon name="chevron" color={palette.muted} size={14} />
+    </Pressable>
+    {expanded && children}
+  </>;
+}
+
+function QuickOptions({ options, selected, disabled, onSelect, testID }: {
+  options: { id: string; label: string }[]; selected: string; disabled: boolean; onSelect(id: string): void; testID: string;
+}) {
+  return <View style={styles.optionList} accessibilityRole="radiogroup">
+    {options.map(({ id, label }) => <Pressable key={id} accessibilityRole="radio" accessibilityState={{ checked: id === selected, disabled }}
+      disabled={disabled} onPress={() => onSelect(id)} testID={testID + '-' + id}
+      style={({ pressed }) => [styles.option, (pressed || id === selected) && styles.optionPressed]}>
+      <Text style={uiStyles.title}>{label}</Text>
+      {id === selected && <FinanceIcon name="check" color={palette.accent} size={16} />}
+    </Pressable>)}
+  </View>;
+}
+
+const styles = StyleSheet.create({
+  form: { gap: 16 },
+  rate: { gap: 4 },
+  quickForm: { gap: 14 },
+  amountGroup: { gap: 6 },
+  amountBox: { flexDirection: 'row', alignItems: 'baseline', gap: 8, paddingHorizontal: 14, minHeight: 72 },
+  amountError: { borderColor: palette.danger },
+  amountText: { color: palette.ink, fontSize: 34, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  amountInput: { flex: 1, paddingVertical: 12, textAlign: 'right' },
+  quickFields: { overflow: 'hidden' },
+  quickField: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 49, paddingHorizontal: 12, paddingVertical: 9 },
+  quickLabel: { color: palette.ink, fontSize: 15, flexShrink: 1 },
+  quickValue: { color: palette.muted, fontSize: 15, marginLeft: 'auto', flexShrink: 1, textAlign: 'right' },
+  fieldDivider: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: palette.line },
+  optionList: { backgroundColor: palette.ground, padding: 4 },
+  option: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+    minHeight: 46, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 },
+  optionPressed: { backgroundColor: palette.selected },
+  detailFields: { gap: 12, paddingHorizontal: 12, paddingBottom: 12 },
+});

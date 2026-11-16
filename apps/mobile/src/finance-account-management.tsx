@@ -2,9 +2,12 @@ import { useEffect, useRef, useState } from 'react';
 import { useIsFocused } from 'expo-router';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { KeyboardController } from 'react-native-keyboard-controller';
-import type { Body, Language, Result } from '@teta/contracts';
+import type { Body, CardNetwork, Language, Result } from '@teta/contracts';
+import { cardNetworks } from '@teta/contracts/client';
 import { request } from './api';
 import { copy } from './copy';
+import { CardColorField } from './finance-card-color';
+import { CardNetworkLogo, cardNetworkLabel } from './finance-card-network';
 import { apiErrorCode } from './finance-commands';
 import type { FinanceAccess } from './finance-commands';
 import { financeCopy } from './finance-copy';
@@ -12,7 +15,7 @@ import type { FinanceCopyKey } from './finance-copy';
 import { FinanceDateField } from './finance-date-field';
 import { formatFinancialDate, formatMoney } from './finance-format';
 import type { AccountEditor } from './finance-navigation';
-import { FinanceAlert, FinanceButton, FinanceField, palette, styles } from './finance-ui';
+import { Choice, FinanceAlert, FinanceButton, FinanceField, palette, styles } from './finance-ui';
 
 type Account = Result<'getAccountBalance'>;
 type Card = Result<'createAccountCard'>;
@@ -232,12 +235,14 @@ export function AccountManagement({ account, access, lang, disabled, editor, not
       {!editor && cardsLoad === 'ready' && <>
         {cards.length ? <View style={layout.cards}>
           {cards.map((card, index) => <Pressable accessibilityRole="button" disabled={blocked}
+            accessibilityLabel={[card.name, cardNetworkLabel(card.network, lang), card.lastFour,
+              formatMoney(snapshot.balanceMinor, snapshot.currency, lang)].filter(Boolean).join(', ')}
             key={card.cardId} testID={'finance-card-' + card.cardId} onPress={() => {
               setMessage(undefined);
               onEdit({ kind: 'card', cardId: card.cardId });
             }} style={({ pressed }) => [layout.card, index > 0 && layout.cardDivider, pressed && layout.pressed]}>
             <View style={layout.cardIdentity}>
-              <View style={[layout.swatch, { backgroundColor: card.appearance }]} />
+              <CardNetworkLogo network={card.network} />
               <View style={layout.cardLabels}>
                 <Text style={styles.title}>{card.name}</Text>
                 {card.lastFour && <Text style={styles.meta}>{'•••• ' + card.lastFour}</Text>}
@@ -314,27 +319,26 @@ function CardEditor({ card, lang, disabled, onSave, onDelete, onCancel }: {
   const [name, setName] = useState(card?.name ?? '');
   const [color, setColor] = useState(card?.appearance ?? '#536F63');
   const [lastFour, setLastFour] = useState(card?.lastFour ?? '');
+  const [network, setNetwork] = useState<CardNetwork | 'unspecified'>(card?.network ?? 'unspecified');
+  const selectedNetwork = network === 'unspecified' ? null : network;
   const [error, setError] = useState<FinanceCopyKey>();
-  const validColor = /^#[0-9a-f]{6}$/i.test(color.trim());
   function save() {
     if (!name.trim()) return setError('invalidName');
-    if (!validColor) return setError('invalidCardColor');
     if (lastFour && !/^[0-9]{4}$/.test(lastFour)) return setError('invalidCardLastFour');
     setError(undefined);
     void KeyboardController.dismiss();
-    onSave({ name: name.trim(), appearance: color.trim().toUpperCase(), lastFour: lastFour || null });
+    onSave({ name: name.trim(), appearance: color.toUpperCase(), lastFour: lastFour || null, network: selectedNetwork });
   }
   return <View style={layout.form}>
     <FinanceField title={t.cardName} value={name} onChangeText={setName} editable={!disabled} maxLength={255} testID="finance-card-name" />
     <FinanceField title={t.cardLastFour} value={lastFour} onChangeText={setLastFour} editable={!disabled} maxLength={4}
       keyboardType="number-pad" testID="finance-card-last-four" />
-    <View style={layout.colorField}>
-      <View style={layout.cardLabels}>
-        <FinanceField title={t.cardColor} value={color} onChangeText={setColor} editable={!disabled} maxLength={7}
-          autoCapitalize="characters" testID="finance-card-color" />
-      </View>
-      <View style={[layout.colorPreview, validColor && { backgroundColor: color.trim() }]} />
-    </View>
+    <Choice title={t.cardNetwork} value={network} onChange={setNetwork} disabled={disabled} testID="finance-card-network"
+      options={[
+        ...cardNetworks.map((id) => ({ id, label: cardNetworkLabel(id, lang), icon: <CardNetworkLogo network={id} /> })),
+        { id: 'unspecified', label: t.cardNetworkUnspecified },
+      ]} />
+    <CardColorField value={color} onChange={setColor} lang={lang} network={selectedNetwork} disabled={disabled} />
     {error && <FinanceAlert>{t[error]}</FinanceAlert>}
     <View style={layout.actions}>
       <FinanceButton title={t.saveChanges} primary disabled={disabled} onPress={save} testID="finance-card-save" />
@@ -355,8 +359,5 @@ const layout = StyleSheet.create({
   cardIdentity: { flexDirection: 'row', alignItems: 'center', gap: 10, flexGrow: 1, flexBasis: '44%', minWidth: 110 },
   cardLabels: { flex: 1, gap: 3 },
   cardBalance: { color: palette.ink, fontWeight: '600', fontSize: 16, fontVariant: ['tabular-nums'], textAlign: 'right', flexShrink: 1 },
-  swatch: { height: 20, width: 28, borderWidth: 1, borderColor: palette.line, borderRadius: 4 },
-  colorField: { flexDirection: 'row', alignItems: 'flex-end', gap: 8 },
-  colorPreview: { width: 48, height: 48, borderWidth: 1, borderColor: palette.line, borderRadius: 8 },
   pressed: { opacity: 0.58 },
 });

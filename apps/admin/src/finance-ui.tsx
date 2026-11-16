@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ChangeEvent, ComponentProps, ReactNode } from 'react';
 import type { Language, Result } from '@teta/contracts';
-import { amountInMinorUnits, formatAmount, formatMoney } from '@teta/contracts/money';
+import { amountInMinorUnits, currencySymbol, formatAmount, formatMoney } from '@teta/contracts/money';
+import type { Currency } from '@teta/contracts/money';
 import { errorCode } from './api';
 import { financeWords } from './finance-copy';
 import { AdminLink } from './navigation';
@@ -9,6 +10,11 @@ import { AdminLink } from './navigation';
 export type Account = Result<'adminListAccounts'>['accounts'][number];
 export type Category = Result<'adminListCategories'>['categories'][number];
 export type Session = Result<'adminMe'>;
+
+export function transactionAmountClass(amountMinor: string) {
+  if (amountMinor === '0') return 'money';
+  return amountMinor.startsWith('-') ? 'money money-debit' : 'money money-credit';
+}
 
 export function useQuery<T>(key: string, load: (signal: AbortSignal) => Promise<T>, onExpired: () => void) {
   const [revision, setRevision] = useState(0);
@@ -69,17 +75,18 @@ export function Failure({ code, lang, retry }: { code: string; lang: Language; r
   </div>;
 }
 
-export function LabeledInput({ label, hint, ...input }: ComponentProps<'input'> & { label: string; hint?: string }) {
-  return <label>{label}<input {...input} aria-label={hint ? label : input['aria-label']} />
-    {hint && <span className="muted">{hint}</span>}
-  </label>;
+export function LabeledInput({ label, currency, ...input }: ComponentProps<'input'> & { label: string; currency?: Currency }) {
+  const unit = currency && currencySymbol(currency);
+  const field = <input {...input} aria-label={unit ? `${label} (${unit})` : input['aria-label']}
+    placeholder={input.placeholder ?? (unit ? '0' : undefined)} />;
+  return <label>{label}{unit ? <span className="currency-input">{field}<span aria-hidden="true">{unit}</span></span> : field}</label>;
 }
 
 export function AccountPicker({ label, accounts, value, onChange }: {
   label: string; accounts: Account[]; value: string; onChange: (value: string) => void;
 }) {
   return <label>{label}<select value={value} onChange={(event) => onChange(event.target.value)} required>
-    {accounts.map(({ accountId, name, currency }) => <option key={accountId} value={accountId}>{name} · {currency}</option>)}
+    {accounts.map(({ accountId, name }) => <option key={accountId} value={accountId}>{name}</option>)}
   </select></label>;
 }
 

@@ -1,9 +1,11 @@
 import type { ComponentProps, ReactNode } from 'react';
 import { Image, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
-import type { TextInputProps } from 'react-native';
+import type { TextInputProps, TextProps } from 'react-native';
 import { KeyboardAwareScrollView, KeyboardController } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SafeAreaView as NativeTabsSafeAreaView } from 'react-native-screens/experimental';
+import { currencySymbol } from '@teta/contracts/money';
+import type { Currency } from '@teta/contracts/money';
 import { FinanceIcon } from './finance-icon';
 import type { FinanceIconName } from './finance-icon';
 
@@ -11,7 +13,20 @@ export const palette = {
   ground: '#F5F7FA', panel: '#FFFFFF', raised: '#EDF1F6', ink: '#17263A', muted: '#53647A',
   line: '#E2E8F0', control: '#8594A7', danger: '#AD343E', accent: '#2459B2', selected: '#E9F1FF',
   positive: '#226349',
+  balanceSurface: '#191F29', balanceMuted: '#C0CAD8',
 };
+
+export function transactionAmountColor(amountMinor: string) {
+  if (amountMinor === '0') return palette.ink;
+  return amountMinor.startsWith('-') ? palette.danger : palette.positive;
+}
+
+export function cardTextColor(color: string) {
+  const channels = [1, 3, 5].map((offset) => parseInt(color.slice(offset, offset + 2), 16) / 255)
+    .map((value) => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
+  const luminance = 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+  return luminance > 0.179 ? '#000000' : palette.panel;
+}
 
 export function FinanceScrollView({ children, nativeTab, ...props }: ComponentProps<typeof KeyboardAwareScrollView> & {
   nativeTab?: boolean;
@@ -51,39 +66,50 @@ export function FinanceButton({ title, onPress, primary, disabled, testID, icon 
   </Pressable>;
 }
 
-export function FinanceField({ title, hint, ...input }: TextInputProps & { title: string; hint?: string }) {
+export function FinanceField({ title, hint, currency, ...input }: TextInputProps & { title: string; hint?: string; currency?: Currency }) {
+  const unit = currency && currencySymbol(currency);
+  const field = <TextInput {...input} returnKeyType={input.multiline ? undefined : 'done'}
+    onSubmitEditing={input.multiline ? undefined : () => void KeyboardController.dismiss()}
+    autoCorrect={input.keyboardType ? false : undefined} spellCheck={input.keyboardType ? false : undefined}
+    accessibilityLabel={unit ? `${title} (${unit})` : title}
+    placeholder={input.placeholder ?? (unit ? '0' : undefined)} placeholderTextColor={palette.muted}
+    style={unit ? styles.currencyInput : styles.input} selectionColor={palette.accent} />;
   return <View style={styles.field}>
     <Text style={styles.label}>{title}</Text>
-    <TextInput {...input} returnKeyType={input.multiline ? undefined : 'done'}
-      onSubmitEditing={input.multiline ? undefined : () => void KeyboardController.dismiss()}
-      autoCorrect={input.keyboardType ? false : undefined} spellCheck={input.keyboardType ? false : undefined}
-      accessibilityLabel={title} placeholderTextColor={palette.muted}
-      style={styles.input} selectionColor={palette.accent} />
+    {unit ? <View style={styles.currencyField}>
+      {field}
+      <Text style={styles.inputText} accessible={false} importantForAccessibility="no">{unit}</Text>
+    </View> : field}
     {hint && <Text style={styles.meta}>{hint}</Text>}
   </View>;
 }
 
 export function Choice<T extends string>({ title, value, options, onChange, disabled, testID }: {
-  title: string; value: T; options: { id: T; label: string }[]; onChange: (value: T) => void;
+  title: string; value: T; options: { id: T; label: string; icon?: ReactNode }[]; onChange: (value: T) => void;
   disabled?: boolean; testID?: string;
 }) {
   return <View style={styles.field}>
     <Text style={styles.label}>{title}</Text>
     <View style={styles.choices} accessibilityRole="radiogroup">
-      {options.map(({ id, label }) => <Pressable key={id} testID={testID && testID + '-' + id}
-        accessibilityRole="radio" accessibilityState={{ checked: value === id, disabled: !!disabled }}
-        disabled={disabled} onPress={() => onChange(id)} style={[styles.choice, value === id && styles.checked]}>
+      {options.map(({ id, label, icon }) => <Pressable key={id} testID={testID && testID + '-' + id}
+        accessibilityRole="radio" accessibilityLabel={label} accessibilityState={{ checked: value === id, disabled: !!disabled }}
+        disabled={disabled} onPress={() => onChange(id)} style={[styles.choice, !!icon && styles.choiceWithIcon, value === id && styles.checked]}>
+        {icon}
         <Text style={styles.buttonText}>{label}</Text>
       </Pressable>)}
     </View>
   </View>;
 }
 
-export function FinanceAlert({ children, testID }: { children: ReactNode; testID?: string }) {
-  return <Text style={styles.alert} testID={testID} accessibilityRole="alert" accessibilityLiveRegion="polite">
+export function FinanceAlert({ children, testID, style }: { children: ReactNode; testID?: string; style?: TextProps['style'] }) {
+  return <Text style={[styles.alert, style]} testID={testID} accessibilityRole="alert" accessibilityLiveRegion="polite">
     {children}
   </Text>;
 }
+
+const inputFrame = { minHeight: 48, paddingHorizontal: 12, borderRadius: 8, backgroundColor: palette.panel,
+  borderWidth: 1, borderColor: palette.control };
+const inputText = { color: palette.ink, fontSize: 17 };
 
 export const styles = StyleSheet.create({
   page: { width: '100%', maxWidth: 540, alignSelf: 'center', paddingHorizontal: 18, paddingTop: 18, paddingBottom: 24, gap: 18 },
@@ -103,11 +129,14 @@ export const styles = StyleSheet.create({
   heroValue: { color: palette.ink, fontSize: 30, fontWeight: '600', fontVariant: ['tabular-nums'] },
   mutedValue: { color: palette.muted, textDecorationLine: 'line-through' },
   field: { gap: 6 },
-  input: { minHeight: 48, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 8, backgroundColor: palette.panel,
-    color: palette.ink, borderWidth: 1, borderColor: palette.control, fontSize: 17 },
+  input: { ...inputFrame, ...inputText, paddingVertical: 10 },
+  inputText,
+  currencyField: { ...inputFrame, flexDirection: 'row', alignItems: 'baseline', gap: 6 },
+  currencyInput: { ...inputText, flex: 1, textAlign: 'right', paddingVertical: 10 },
   choices: { flexDirection: 'row', gap: 6, flexWrap: 'wrap' },
   choice: { minHeight: 44, paddingHorizontal: 12, paddingVertical: 8, borderWidth: 1, borderColor: palette.control,
     borderRadius: 8, justifyContent: 'center', flexShrink: 1 },
+  choiceWithIcon: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   checked: { borderColor: palette.accent, backgroundColor: palette.selected },
   button: { minHeight: 44, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, justifyContent: 'center',
     alignItems: 'center', flexDirection: 'row', gap: 6, backgroundColor: palette.panel, borderWidth: 1,

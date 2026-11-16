@@ -127,7 +127,7 @@ function RuleForm({ account, rule, mode, today, categories, lang, disabled, prev
         </>}
         {frequency !== 'once' && <LabeledInput label={t.last} type="date" value={endDate} min={firstDate} max={lastFinancialDate}
           onChange={(event) => setEndDate(event.target.value)} />}
-        <LabeledInput label={f.amount + ' (' + account.currency + ')'} {...amount.field} required />
+        <LabeledInput label={f.amount} currency={account.currency} {...amount.field} required />
         <label>{f.category}<select required value={categoryId} onChange={(event) => setCategory(event.target.value)}>
           <option value="" disabled>{f.choose}</option>
           {options.map(({ id, nameEn, nameRu }) => <option key={id} value={id}>{lang === 'ru' ? nameRu : nameEn}</option>)}

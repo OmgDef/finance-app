@@ -3,7 +3,7 @@ import type { Language, Result } from '@teta/contracts';
 import type { TransactionFields } from './finance-commands';
 import { financeCopy } from './finance-copy';
 import { formatFinancialDate, formatMoney, formatTransferRate } from './finance-format';
-import { palette, styles } from './finance-ui';
+import { palette, styles, transactionAmountColor } from './finance-ui';
 
 export type TransactionHistory = Result<'listTransactionVersions'>;
 export type TransactionVersion = TransactionHistory['versions'][number];
@@ -57,7 +57,9 @@ export function TransactionVersions({ history, lang, accounts, categories }: {
           {version.actorRole === 'admin' && <Text style={styles.meta}>{t.changedByAdmin}</Text>}
           {movements.map((movement) => <View key={movement.accountId} style={layout.movement}>
             <Text style={styles.meta}>{accountNames.get(movement.accountId) ?? t.account}</Text>
-            <Text style={styles.value}>{formatMoney(movement.amountMinor, movement.currency, lang, true)}</Text>
+            <Text style={[styles.value, { color: transactionAmountColor(movement.amountMinor) }]}>
+              {formatMoney(movement.amountMinor, movement.currency, lang, true)}
+            </Text>
           </View>)}
           {rate && <Text style={styles.meta}>{rate}</Text>}
           {version.comment && <Text style={styles.meta}>{version.comment}</Text>}

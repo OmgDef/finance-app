@@ -30,7 +30,7 @@ export function WeeklyCashFlowPlot({ weeks, currency, lang, selection, overview 
   weeks: Week[]; currency: Currency; lang: Language;
   selection: { index?: number; onSelect(index: number): void }; overview?: boolean;
 }) {
-  const height = overview ? 88 : 60;
+  const height = 60;
   const max = Math.max(0, ...weeks.flatMap((week) => cashFlowSeries.map(({ field }) => Number(week[field]))));
   const t = statisticsCopy[lang];
   const dates = overview && weeks.length ? [...new Set([0, 1, 2, 3].map((tick) => {

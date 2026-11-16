@@ -6,10 +6,10 @@ import { copy } from './copy';
 import { apiErrorCode } from './finance-commands';
 import type { FinanceAccess } from './finance-commands';
 import { financeCopy } from './finance-copy';
-import { formatAmount, formatFinancialDate, formatMoney, recentStatisticsPeriod } from './finance-format';
+import { currencyName, formatFinancialDate, formatMoney, recentStatisticsPeriod } from './finance-format';
 import { FinanceIcon } from './finance-icon';
 import { statisticsCopy } from './finance-statistics-copy';
-import { FinanceAlert, FinanceButton, palette, styles } from './finance-ui';
+import { FinanceAlert, FinanceButton, palette, styles, transactionAmountColor } from './finance-ui';
 
 type Report = Result<'getStatistics'>;
 type Entry = Report['entries'][number];
@@ -139,7 +139,8 @@ export function StatisticsScreen({ statistics, accounts, categories, lang, onEdi
   const accountNames = new Map(accounts?.map(({ accountId, name }) => [accountId, name]));
   const filterLabels = [filters.accountId && (accountNames.get(filters.accountId) ?? f.account),
     filters.type && (filters.type === 'income' ? f.incomeEntry : f.expenseEntry),
-    filters.categoryId && (categoryNames.get(filters.categoryId) ?? filters.categoryId), filters.currency].filter(Boolean);
+    filters.categoryId && (categoryNames.get(filters.categoryId) ?? filters.categoryId),
+    filters.currency && currencyName(filters.currency, lang)].filter(Boolean);
   const errorMessage = error === 'NOT_FOUND' ? t.unavailable : error === 'REPORT_CHANGED' ? t.reportChanged
     : error === 'INVALID_REQUEST' ? f.invalidRequest : error && (copy[lang].errors[error] ?? f.error);
   const entriesByDay = new Map<string, Entry[]>();
@@ -190,18 +191,17 @@ export function StatisticsScreen({ statistics, accounts, categories, lang, onEdi
           {report?.totals.length === 0 && <Text style={[styles.meta, layout.message]} testID="statistics-empty">{t.empty}</Text>}
           {report?.totals.map(({ currency, incomeMinor, expenseMinor }, index) => (
             <View key={currency} style={[layout.totalGroup, index > 0 && layout.divider]} testID={'statistics-total-' + currency}>
-              <Text accessibilityRole="header" style={layout.currency}>{currency}</Text>
               <View style={stackMetrics ? layout.stackedMetrics : layout.metrics}>
                 <View style={[layout.metric, !stackMetrics && layout.metricColumn]}>
                   <Text style={styles.meta}>{t.income}</Text>
-                  <Text style={[layout.amount, layout.income]} accessibilityLabel={formatMoney(incomeMinor, currency, lang)}>
-                    {formatAmount(incomeMinor, lang)}
+                  <Text style={[layout.amount, layout.income]}>
+                    {formatMoney(incomeMinor, currency, lang)}
                   </Text>
                 </View>
                 <View style={[layout.metric, !stackMetrics && layout.metricColumn]}>
                   <Text style={styles.meta}>{t.expenses}</Text>
-                  <Text style={layout.amount} accessibilityLabel={formatMoney(expenseMinor, currency, lang)}>
-                    {formatAmount(expenseMinor, lang)}
+                  <Text style={layout.amount}>
+                    {formatMoney(expenseMinor, currency, lang)}
                   </Text>
                 </View>
               </View>
@@ -216,7 +216,6 @@ export function StatisticsScreen({ statistics, accounts, categories, lang, onEdi
           {report.totals.filter(({ currency }) => report.categories.some((category) => category.currency === currency))
             .map(({ currency, expenseMinor }, index) => (
               <View key={currency} style={[layout.categoryGroup, index > 0 && layout.divider]}>
-                <Text accessibilityRole="header" style={layout.categoryCurrency}>{currency}</Text>
                 {report.categories.filter((category) => category.currency === currency).map((entry) => (
                   <Pressable key={entry.categoryId} accessibilityRole="button"
                     testID={`statistics-expense-${currency}-${entry.categoryId}`}
@@ -243,19 +242,20 @@ export function StatisticsScreen({ statistics, accounts, categories, lang, onEdi
               <Text accessibilityRole="header" style={layout.day}>{formatFinancialDate(date, lang)}</Text>
               {entries.map((entry, rowIndex) => {
                 const isIncome = entry.type === 'income';
+                const color = transactionAmountColor(entry.amountMinor);
                 const title = categoryNames.get(entry.categoryId) ?? (isIncome ? f.incomeEntry : f.expenseEntry);
                 const account = accountNames.get(entry.accountId);
                 return <Pressable key={entry.transactionId} accessibilityRole="button" onPress={() => onTransaction(entry)}
                   testID={'statistics-transaction-' + entry.transactionId}
                   style={({ pressed }) => [layout.transaction, rowIndex > 0 && layout.divider, pressed && layout.pressed]}>
                   <View style={layout.identity}>
-                    <FinanceIcon name={isIncome ? 'income' : 'expense'} color={isIncome ? palette.positive : palette.muted} size={18} />
+                    <FinanceIcon name={isIncome ? 'income' : 'expense'} color={color} size={18} />
                     <View style={layout.labels}>
                       <Text style={styles.title}>{entry.comment || title}</Text>
                       <Text style={styles.meta}>{[entry.comment && title, account].filter(Boolean).join(' · ') || title}</Text>
                     </View>
                   </View>
-                  <Text style={[layout.entryAmount, isIncome && layout.income]}>
+                  <Text style={[layout.entryAmount, { color }]}>
                     {formatMoney(entry.amountMinor, entry.currency, lang, true)}
                   </Text>
                 </Pressable>;
@@ -283,7 +283,6 @@ const layout = StyleSheet.create({
   section: { gap: 8 },
   message: { padding: 12, gap: 8 },
   totalGroup: { gap: 6, paddingHorizontal: 12, paddingVertical: 10 },
-  currency: { color: palette.muted, fontSize: 12, fontWeight: '600' },
   divider: { borderTopColor: palette.line, borderTopWidth: StyleSheet.hairlineWidth },
   metrics: { flexDirection: 'row', gap: 10 },
   stackedMetrics: { gap: 8 },
@@ -292,7 +291,6 @@ const layout = StyleSheet.create({
   amount: { color: palette.ink, fontSize: 19, fontWeight: '700', fontVariant: ['tabular-nums'] },
   income: { color: palette.positive },
   categoryGroup: { paddingVertical: 6 },
-  categoryCurrency: { color: palette.muted, fontSize: 12, fontWeight: '600', paddingHorizontal: 12, paddingTop: 4 },
   categoryRow: { paddingHorizontal: 12, paddingVertical: 8, gap: 6, minHeight: 48, justifyContent: 'center' },
   line: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'baseline', justifyContent: 'space-between', gap: 6 },
   track: { height: 4, borderRadius: 2, backgroundColor: palette.raised, overflow: 'hidden' },

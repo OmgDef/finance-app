@@ -4,7 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import type { Language, Result } from '@teta/contracts';
 import { financeCopy } from './finance-copy';
 import { FinanceDateField } from './finance-date-field';
-import { currencies, recentStatisticsPeriod } from './finance-format';
+import { currencies, currencyName, recentStatisticsPeriod } from './finance-format';
 import type { Currency } from './finance-format';
 import { FinanceIcon } from './finance-icon';
 import { statisticsCopy } from './finance-statistics-copy';
@@ -62,8 +62,8 @@ export function StatisticsFiltersScreen({ current, currentPeriod, reportPeriod, 
   const [expanded, setExpanded] = useState<List>();
   const invalid = period === 'custom' && fromDate > throughDate;
 
-  const accountOptions = [{ id: 'all', label: t.allAccounts }, ...(accounts ?? []).map(({ accountId, name, currency, archived }) => ({
-    id: accountId, label: [name, currency, ...(archived ? [f.archivedAccount] : [])].join(' · '),
+  const accountOptions = [{ id: 'all', label: t.allAccounts }, ...(accounts ?? []).map(({ accountId, name, archived }) => ({
+    id: accountId, label: archived ? name + ' · ' + f.archivedAccount : name,
   }))];
   const categoryOptions = [{ id: 'all', label: t.allCategories }, ...(categories ?? [])
     .filter((item) => type === 'all' || item.type === type)
@@ -138,7 +138,7 @@ export function StatisticsFiltersScreen({ current, currentPeriod, reportPeriod, 
           expanded={expanded === 'account'} onToggle={() => toggle('account')}
           onSelect={(id) => { setAccount(id); setExpanded(undefined); }} />
         <Choice title={t.currency} value={currency} onChange={setCurrency} testID="statistics-currency"
-          options={[{ id: 'all', label: t.allCurrencies }, ...currencies.map((id) => ({ id, label: id }))]} />
+          options={[{ id: 'all', label: t.allCurrencies }, ...currencies.map((id) => ({ id, label: currencyName(id, lang) }))]} />
       </View>
     </ScrollView>
     <SafeAreaView edges={['bottom']} style={layout.footer}>

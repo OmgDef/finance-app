@@ -1,6 +1,7 @@
 import { Type as T } from '@sinclair/typebox';
 import type { Static, TSchema } from '@sinclair/typebox';
-import { endpoints } from './client.ts';
+import { cardNetworks, endpoints } from './client.ts';
+export type { CardNetwork } from './client.ts';
 
 export const language = T.Union([T.Literal('en'), T.Literal('ru')]);
 const email = T.String({ minLength: 3, maxLength: 254, pattern: '^\\s*[^\\s@]+@[^\\s@]+\\.[^\\s@]+\\s*$' });
@@ -137,12 +138,15 @@ const reconciliationFailures = {
 };
 const reconciliationDescription = 'Saves the factual balance and its difference from the current balance, including zero. Selected dates already included in that balance are skipped in the same transaction. An identical retry returns the original adjustment.';
 const cardParams = T.Object({ accountId: id, cardId: id });
+const cardNetwork = T.Union([...cardNetworks.map((network) => T.Literal(network)), T.Null()]);
 const cardFields = {
   name: accountName,
   appearance: T.String({ pattern: '^#[0-9a-fA-F]{6}$', description: 'Card color in #RRGGBB format' }),
   lastFour: T.Union([T.String({ pattern: '^[0-9]{4}$' }), T.Null()]),
+  network: cardNetwork,
 };
-const cardInput = T.Object({ ...cardFields, lastFour: T.Optional(cardFields.lastFour) }, { additionalProperties: false });
+const cardInput = T.Object({ ...cardFields, lastFour: T.Optional(cardFields.lastFour), network: T.Optional(cardNetwork) },
+  { additionalProperties: false });
 const accountCard = T.Object({ cardId: id, accountId: id, ...cardFields, currency, balanceMinor });
 const accountCardPreview = T.Object({
   accountId: id,
@@ -643,7 +647,8 @@ export const routes = {
   updateAccountCard: {
     ...route(endpoints.updateAccountCard, 'mobile', 'Replace the display fields of a card', cardInput, accountCard),
     params: cardParams,
-    description: 'Send the name and appearance. Omitting lastFour or passing null clears the stored digits.',
+    description: 'Send the name and appearance. Omitting lastFour or passing null clears the stored digits. ' +
+      'Omitting network preserves the stored payment network. Passing null clears it.',
     failures: cardWriteFailures,
   },
   deleteAccountCard: {
