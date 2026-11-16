@@ -48,15 +48,22 @@ export async function verifyPassword(value: string, hash: string) {
 }
 
 export function seal(key: Buffer, id: string, plain: Buffer) {
+  return sealBytes(key, id, plain).toString('hex');
+}
+
+export function sealBytes(key: Buffer, id: string, plain: Buffer) {
   const nonce = randomBytes(12);
   const cipher = createCipheriv('aes-256-gcm', key, nonce);
   cipher.setAAD(Buffer.from(id));
   const ciphertext = Buffer.concat([cipher.update(plain), cipher.final()]);
-  return Buffer.concat([nonce, cipher.getAuthTag(), ciphertext]).toString('hex');
+  return Buffer.concat([nonce, cipher.getAuthTag(), ciphertext]);
 }
 
 export function unseal(key: Buffer, id: string, encrypted: string) {
-  const bytes = Buffer.from(encrypted, 'hex');
+  return unsealBytes(key, id, Buffer.from(encrypted, 'hex'));
+}
+
+export function unsealBytes(key: Buffer, id: string, bytes: Buffer) {
   const cipher = createDecipheriv('aes-256-gcm', key, bytes.subarray(0, 12));
   cipher.setAAD(Buffer.from(id));
   cipher.setAuthTag(bytes.subarray(12, 28));

@@ -11,7 +11,7 @@
 
 {$TETA_SCHEME:https}://{$TETA_BIND_IP}:{$TETA_API_PORT} {
 	bind {$TETA_LISTEN_IP:0.0.0.0}
-	@mobile path /api/v1/health /api/v1/support /api/v1/auth/* /api/v1/me /api/v1/me/time-zone /api/v1/accounts /api/v1/accounts/* /api/v1/transactions /api/v1/transactions/* /api/v1/commands/* /api/v1/categories /api/v1/statistics /api/v1/exchange-rates /api/v1/schedule-rules /api/v1/schedule-rules/* /api/v1/schedule-occurrences /api/v1/schedule-occurrences/*
+	@mobile path /api/v1/health /api/v1/support /api/v1/auth/* /api/v1/me /api/v1/me/time-zone /api/v1/me/profile /api/v1/me/profile/* /api/v1/accounts /api/v1/accounts/* /api/v1/transactions /api/v1/transactions/* /api/v1/commands/* /api/v1/categories /api/v1/statistics /api/v1/exchange-rates /api/v1/schedule-rules /api/v1/schedule-rules/* /api/v1/schedule-occurrences /api/v1/schedule-occurrences/*
 	handle @mobile {
 		reverse_proxy {$TETA_UPSTREAM:api:3000} {
 			# Browsers share cookies between ports on the same host.

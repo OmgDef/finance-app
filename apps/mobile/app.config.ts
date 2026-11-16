@@ -22,6 +22,7 @@ export default {
       android: { darkContentBarsStyle: false },
     }),
     ['expo-secure-store', { configureAndroidBackup: false, faceIDPermission: `Unlock ${copy.en.appName} with Face ID.` }],
+    ['expo-image-picker', { photosPermission: 'Choose a photo for your profile.', cameraPermission: false, microphonePermission: false }],
     './src/installation-backup.cjs',
   ],
   ios: {
@@ -42,6 +43,7 @@ export default {
       ios: {
         CFBundleDisplayName: copy.ru.appName,
         NSFaceIDUsageDescription: `Разблокируйте ${copy.ru.appName} с помощью Face ID.`,
+        NSPhotoLibraryUsageDescription: 'Выберите фото для своего профиля.',
       },
       android: { app_name: copy.ru.appName },
     },

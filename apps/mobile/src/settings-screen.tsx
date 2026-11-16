@@ -1,4 +1,5 @@
 import { requireOptionalNativeModule } from 'expo';
+import { useRouter } from 'expo-router';
 import Constants from 'expo-constants';
 import { useState } from 'react';
 import type { ReactNode } from 'react';
@@ -11,6 +12,7 @@ import { FinanceIcon } from './finance-icon';
 import type { FinanceIconName } from './finance-icon';
 import { scheduleCopy } from './finance-schedule-copy';
 import { FinanceAlert, FinanceBrand, palette, styles } from './finance-ui';
+import { profileCopy } from './profile-copy';
 import { timeZoneLabel } from './time-zones';
 
 const languageNames = { ru: 'Русский', en: 'English' } as const;
@@ -64,6 +66,7 @@ export function SettingsScreen({ lang, profile, busy, languageError, zoneEditing
   onSignOut: () => void;
 }) {
   const t = copy[lang];
+  const router = useRouter();
   const [languageOpen, setLanguageOpen] = useState(false);
   const closeLanguage = () => setLanguageOpen(false);
   return <>
@@ -76,6 +79,10 @@ export function SettingsScreen({ lang, profile, busy, languageError, zoneEditing
             <Text style={styles.title}>{profile.email}</Text>
             <Text style={styles.meta}>{t.accountEmail}</Text>
           </View>
+        </View>
+        <View style={layout.divider}>
+          <SettingRow icon="profile" title={profileCopy[lang].details} onPress={() => router.push('/settings/profile')}
+            testID="profile-edit-open" />
         </View>
         <View style={layout.divider}>
           <SettingRow icon="clock" title={t.timeZone} hint={t.editTimeZone} value={timeZoneLabel(profile.timeZone, lang)}

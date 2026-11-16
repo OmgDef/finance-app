@@ -1,5 +1,7 @@
 export const cardNetworks = ['visa', 'mastercard', 'mir', 'unionpay'] as const;
 export type CardNetwork = typeof cardNetworks[number];
+export const avatarMaxPixels = 512;
+export const avatarMaxBytes = 160 * 1024;
 
 export const endpoints = {
   health: { method: 'GET', url: '/api/v1/health' },
@@ -8,6 +10,10 @@ export const endpoints = {
   unlock: { method: 'POST', url: '/api/v1/auth/unlock' },
   me: { method: 'GET', url: '/api/v1/me' },
   setTimeZone: { method: 'PUT', url: '/api/v1/me/time-zone' },
+  getProfileSummary: { method: 'GET', url: '/api/v1/me/profile/summary' },
+  getPersonalProfile: { method: 'GET', url: '/api/v1/me/profile' },
+  savePersonalProfile: { method: 'PUT', url: '/api/v1/me/profile' },
+  getProfileAvatar: { method: 'GET', url: '/api/v1/me/profile/avatar' },
   logout: { method: 'POST', url: '/api/v1/auth/logout' },
   enableBiometrics: { method: 'POST', url: '/api/v1/auth/biometrics' },
   disableBiometrics: { method: 'DELETE', url: '/api/v1/auth/biometrics' },

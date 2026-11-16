@@ -3,12 +3,13 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { test } from 'node:test';
 import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/mysql2';
+import sharp from 'sharp';
 import { routes } from '@teta/contracts';
 import type { Body, Result, Route } from '@teta/contracts';
 import { configureAdmin } from '../src/admin.ts';
 import { buildApp } from '../src/app.ts';
 import { configFromEnv } from '../src/config.ts';
-import { token, totpAt, verifier } from '../src/crypto.ts';
+import { sealBytes, token, totpAt, verifier } from '../src/crypto.ts';
 import { connect, one } from '../src/db.ts';
 import { minute } from '../src/rates.ts';
 
@@ -28,6 +29,7 @@ test('Access API against migrated MySQL', async (t) => {
   const env = {
     DATABASE_URL: databaseUrl, API_ORIGIN: 'https://192.0.2.2:18443', ADMIN_ORIGIN: 'https://192.0.2.2:18444',
     ACCESS_KEY: randomBytes(32).toString('hex'), TOTP_KEY: randomBytes(32).toString('hex'), PROXY_IP: '192.0.2.1',
+    PROFILE_KEYS: '1:' + randomBytes(32).toString('hex'),
   };
   assert.throws(() => configFromEnv({ ...env, ADMIN_ORIGIN: env.API_ORIGIN }), /separate API and admin origins/);
   const config = configFromEnv(env);
@@ -113,6 +115,78 @@ test('Access API against migrated MySQL', async (t) => {
     csrf = result.data().csrf;
     assert.match(String(result.response.headers['set-cookie']), /^__Host-teta-admin=[a-f0-9]{64}; Path=\/; HttpOnly; Secure; SameSite=Strict;/);
   }
+
+  await t.test('Personal profiles stay private and save fields and avatars as one version', async () => {
+    const owner = randomUUID();
+    const other = randomUUID();
+    await db.execute(sql`INSERT INTO users (id, email) VALUES (${owner}, ${owner + '@example.test'}),
+      (${other}, ${other + '@example.test'})`);
+    async function addDevice(userId: string) {
+      const device = randomUUID();
+      const value = token();
+      await db.execute(sql`INSERT INTO devices (id, user_id, verifier, pin_hash)
+        VALUES (${device}, ${userId}, ${token()}, 'unused')`);
+      await db.execute(sql`INSERT INTO sessions (verifier, device_id, expires_at)
+        VALUES (${verifier(config.accessKey, 'mobile-session', value)}, ${device}, ${now + minute})`);
+      return { token: value, device };
+    }
+    try {
+      const first = await addDevice(owner);
+      const second = await addDevice(owner);
+      const outsider = await addDevice(other);
+      const empty = await send('getPersonalProfile', undefined, first);
+      expect(empty, 200);
+      assert.equal(empty.data().version, 0);
+      assert.ok(Object.values(empty.data().fields).every((value) => value === null));
+      expect(await send('getPersonalProfile', undefined, { cookie: '' }), 401, 'SESSION_EXPIRED');
+
+      const fields = { firstName: 'Мира', lastName: 'Белова', patronymic: null, birthDate: '1992-02-29',
+        passportSeries: '0091', passportNumber: '00427189', registrationAddress: '17 Birchwood Lane' };
+      const image = await sharp({ create: { width: 48, height: 48, channels: 3, background: '#57769f' } })
+        .withMetadata().jpeg().toBuffer();
+      const change = { expectedVersion: 0, fields, avatarJpeg: image.toString('base64') };
+      expect(await send('savePersonalProfile', { ...change, fields: { ...fields, birthDate: '2999-01-01' } }, first),
+        400, 'INVALID_BIRTH_DATE');
+      expect(await send('savePersonalProfile', { ...change, avatarJpeg: '/9j/AA==' }, first), 400, 'INVALID_AVATAR');
+      const results = await Promise.all([send('savePersonalProfile', change, first), send('savePersonalProfile', change, second)]);
+      assert.deepEqual(results.map(({ status }) => status).sort(), [200, 409]);
+      assert.equal(results.find(({ status }) => status === 409)?.error().code, 'VERSION_CONFLICT');
+      const saved = await send('getPersonalProfile', undefined, second);
+      assert.deepEqual(saved.data().fields, fields);
+      const summary = await send('getProfileSummary', undefined, second);
+      assert.deepEqual(summary.data(), { firstName: 'Мира', lastName: 'Белова', initials: 'МБ', avatarVersion: 1 });
+      const legacyIdentity = sealBytes(config.profileKeys!.get(1)!, 'personal-profile:' + owner + ':summary',
+        Buffer.from(JSON.stringify({ firstName: fields.firstName, initials: 'МБ' })));
+      await db.execute(sql`UPDATE personal_profiles SET identity_summary = ${legacyIdentity} WHERE user_id = ${owner}`);
+      assert.deepEqual((await send('getProfileSummary', undefined, second)).data(), summary.data());
+      assert.equal(saved.response.headers['cache-control'], 'no-store');
+
+      const avatar = await send('getProfileAvatar', undefined, second);
+      expect(avatar, 200);
+      const storedImage = Buffer.from(avatar.data().jpeg, 'base64');
+      assert.equal((await sharp(storedImage).metadata()).exif, undefined);
+      assert.equal(avatar.response.headers['cache-control'], 'no-store');
+      const encrypted = await one<{ personal_fields: Buffer; avatar_jpeg: Buffer }>(db, sql`
+        SELECT personal_fields, avatar_jpeg FROM personal_profiles WHERE user_id = ${owner}`);
+      assert.ok(encrypted && !encrypted.personal_fields.includes(Buffer.from(fields.passportNumber)) &&
+        !encrypted.avatar_jpeg.equals(storedImage));
+      assert.equal((await send('getPersonalProfile', undefined, outsider)).data().version, 0);
+      expect(await send('getProfileAvatar', undefined, outsider), 404, 'NOT_FOUND');
+      expect(await send('savePersonalProfile', { expectedVersion: 1, fields: { ...fields, passportNumber: null } }, second), 200);
+      assert.equal((await send('getProfileAvatar', undefined, second)).data().version, 1);
+      expect(await send('savePersonalProfile', { expectedVersion: 2, fields: empty.data().fields, avatarJpeg: null }, second), 200);
+      expect(await send('getProfileAvatar', undefined, first), 404, 'NOT_FOUND');
+
+      await db.execute(sql`UPDATE devices SET state = 'revoked' WHERE id = ${first.device}`);
+      expect(await send('getPersonalProfile', undefined, first), 403, 'DEVICE_REVOKED');
+      now += minute + 1;
+      expect(await send('getProfileAvatar', undefined, second), 401, 'SESSION_EXPIRED');
+    } finally {
+      await db.execute(sql`DELETE s FROM sessions s JOIN devices d ON s.device_id = d.id WHERE d.user_id IN (${owner}, ${other})`);
+      await db.execute(sql`DELETE FROM devices WHERE user_id IN (${owner}, ${other})`);
+      await db.execute(sql`DELETE FROM users WHERE id IN (${owner}, ${other})`);
+    }
+  });
 
   await t.test('Public support returns published localized fields and works without a token', async () => {
     const id = randomUUID();

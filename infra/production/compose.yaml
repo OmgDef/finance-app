@@ -52,6 +52,7 @@ services:
       PROXY_IP: 172.29.63.1
       ACCESS_KEY: ${ACCESS_KEY:?Set ACCESS_KEY}
       TOTP_KEY: ${TOTP_KEY:?Set TOTP_KEY}
+      PROFILE_KEYS: ${PROFILE_KEYS:-}
     ports:
       - 127.0.0.1:18443:3000
 

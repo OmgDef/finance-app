@@ -35,6 +35,7 @@ const AccessContext = createContext<{
   clearSettingsDraft: () => void;
   restoreSettings: boolean;
   setSettingsFocused: (focused: boolean) => void;
+  runProfilePhotoPicker: <T>(pick: () => Promise<T>) => Promise<T | undefined>;
   startupReady: boolean;
   setSplashHidden: (hidden: boolean) => void;
   showsUnlockScreen: boolean;
@@ -89,6 +90,7 @@ export function AccessProvider({ children }: { children: ReactNode }) {
   const zoneOperation = useRef(false);
   const zoneRevision = useRef(0);
   const protectedPreview = useRef(false);
+  const profilePhotoPicker = useRef<symbol | undefined>(undefined);
 
   function clearSettingsDraft() {
     if (operation.current || zoneOperation.current) return;
@@ -100,6 +102,7 @@ export function AccessProvider({ children }: { children: ReactNode }) {
 
   function lock(next: Mode) {
     epoch.current += 1;
+    profilePhotoPicker.current = undefined;
     session.current = null;
     clearTimeout(expired.current);
     setProfile(null);
@@ -173,6 +176,8 @@ export function AccessProvider({ children }: { children: ReactNode }) {
       if (state === 'inactive' && biometricPrompt.current) return;
       if (state !== 'active') {
         lastAway.current ??= Date.now();
+        // The native photo picker can move the editor to the background briefly.
+        if (profilePhotoPicker.current) return;
         epoch.current += 1;
         if (zoneOperation.current) {
           zoneOperation.current = false;
@@ -196,7 +201,7 @@ export function AccessProvider({ children }: { children: ReactNode }) {
       if (away === null || !session.current) return;
       if (Date.now() - away >= 120_000 || Date.now() >= Date.parse(session.current.expiresAt)) {
         lock('unlock');
-      } else {
+      } else if (!profilePhotoPicker.current) {
         void checkAccess();
       }
     });
@@ -480,6 +485,24 @@ export function AccessProvider({ children }: { children: ReactNode }) {
       Date.now() < Date.parse(activeSession.expiresAt) && AppState.currentState === 'active',
     onAccessFailure: rejectAccess,
   } : null;
+
+  async function runProfilePhotoPicker<T>(pick: () => Promise<T>): Promise<T | undefined> {
+    if (!access?.isCurrent() || profilePhotoPicker.current) return;
+    const attempt = Symbol();
+    profilePhotoPicker.current = attempt;
+    try {
+      const result = await pick();
+      if (AppState.currentState !== 'active') await waitForActive();
+      if (profilePhotoPicker.current !== attempt || !access.isCurrent()) return;
+      await request('me', { token: access.token });
+      if (profilePhotoPicker.current === attempt && access.isCurrent()) return result;
+    } catch (error) {
+      if (profilePhotoPicker.current !== attempt || !access.isCurrent()) return;
+      if (!rejectAccess(errorCode(error))) throw error;
+    } finally {
+      if (profilePhotoPicker.current === attempt) profilePhotoPicker.current = undefined;
+    }
+  }
   const deviceZone = getCalendars()[0]?.timeZone;
   const suggestedZone = deviceZone && /^[A-Za-z][A-Za-z0-9_+/-]*$/.test(deviceZone) ? deviceZone : null;
 
@@ -651,7 +674,7 @@ export function AccessProvider({ children }: { children: ReactNode }) {
 
   return <AccessContext value={{ access, lang, settings, settingsBusy: busy, clearSettingsDraft,
     restoreSettings: settingsFocused.current, setSettingsFocused: (focused) => { settingsFocused.current = focused; },
-    startupReady, setSplashHidden, showsUnlockScreen, timeZoneSuggestion, signedOut }}>
+    runProfilePhotoPicker, startupReady, setSplashHidden, showsUnlockScreen, timeZoneSuggestion, signedOut }}>
     {children}
     {access && timeZoneDraft !== null && <TimeZonePicker lang={lang} current={access.profile.timeZone} device={suggestedZone}
       selected={timeZoneDraft} busy={busy} error={zoneMessage}

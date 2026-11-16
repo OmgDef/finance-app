@@ -23,6 +23,7 @@ import {
 } from './finance.ts';
 import { mobileAccess } from './mobile.ts';
 import { readProfileCalendar } from './profile.ts';
+import { readPersonalProfile, readProfileAvatar, readProfileSummary, savePersonalProfile } from './personal-profile.ts';
 import { minute } from './rates.ts';
 import {
   changeScheduleRule, createScheduleRule, getNextPayment, getScheduleRule, listScheduleOccurrences, listScheduleRules,
@@ -94,6 +95,7 @@ export function buildApp(config: Config, db: Db, clock = Date.now, logger = fals
       url: config.adminUnderPath && route.url.startsWith('/api/v1/admin/') ? '/admin' + route.url : route.url,
       ...((key === 'replaceScheduleRule' || key === 'adminReplaceScheduleRule') && { bodyLimit: 256 * 1024 }),
       ...((key === 'adminCreateFaq' || key === 'adminUpdateFaq') && { bodyLimit: 64 * 1024 }),
+      ...(key === 'savePersonalProfile' && { bodyLimit: 240 * 1024 }),
       schema: {
         ...((route.method === 'POST' || route.method === 'PUT') && !('optionalBody' in route) && { body: route.body }),
         ...('params' in route && { params: route.params }),
@@ -140,6 +142,14 @@ export function buildApp(config: Config, db: Db, clock = Date.now, logger = fals
   add('activate', async (request) => ({ ...await mobile.activate(request.body, request.ip), recoveryVersion: config.recoveryVersion }));
   add('unlock', async (request) => ({ ...await mobile.unlock(request.body, request.ip), recoveryVersion: config.recoveryVersion }));
   add('me', async (request) => ({ ...await mobile.profile(bearer(request)), recoveryVersion: config.recoveryVersion }));
+  add('getProfileSummary', async (request) => mobile.withSession(bearer(request), (tx, user) =>
+    readProfileSummary(tx, user.id, config.profileKeys)));
+  add('getPersonalProfile', async (request) => mobile.withSession(bearer(request), (tx, user) =>
+    readPersonalProfile(tx, user.id, config.profileKeys)));
+  add('savePersonalProfile', async (request) => mobile.withSession(bearer(request), (tx, user, _device, now) =>
+    savePersonalProfile(tx, user.id, now, config.profileKeys, request.body)));
+  add('getProfileAvatar', async (request) => mobile.withSession(bearer(request), (tx, user) =>
+    readProfileAvatar(tx, user.id, config.profileKeys)));
   add('setTimeZone', async (request) =>
     ({ ...await mobile.setTimeZone(bearer(request), request.body.timeZone), recoveryVersion: config.recoveryVersion }));
   add('logout', async (request) => { await mobile.logout(bearer(request)); return ok; });

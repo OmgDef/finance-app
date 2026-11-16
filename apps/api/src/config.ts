@@ -6,6 +6,7 @@ export interface Config {
   proxyIp: string | false;
   accessKey: Buffer;
   totpKey: Buffer;
+  profileKeys?: ReadonlyMap<number, Buffer>;
   recoveryVersion: string;
 }
 
@@ -40,8 +41,19 @@ export function configFromEnv(env = process.env): Config {
   const accessKey = key('ACCESS_KEY');
   const totpKey = key('TOTP_KEY');
   if (accessKey.equals(totpKey)) throw new Error('Expected separate keys');
+  const profileKeys = new Map<number, Buffer>();
+  for (const entry of env.PROFILE_KEYS?.split(',').filter(Boolean) ?? []) {
+    const match = /^([1-9][0-9]{0,8}):([a-f0-9]{64})$/i.exec(entry);
+    if (!match) throw new Error('Invalid PROFILE_KEYS');
+    const version = Number(match[1]);
+    const profileKey = Buffer.from(match[2]!, 'hex');
+    if (profileKeys.has(version) || [accessKey, totpKey, ...profileKeys.values()].some((value) => value.equals(profileKey))) {
+      throw new Error('Expected separate profile keys and unique versions');
+    }
+    profileKeys.set(version, profileKey);
+  }
   const recoveryVersion = env.RECOVERY_VERSION ?? '1';
   if (!/^[1-9][0-9]{0,9}$/.test(recoveryVersion)) throw new Error('Invalid RECOVERY_VERSION');
   return { databaseUrl: required('DATABASE_URL'), apiOrigin, adminOrigin, adminUnderPath,
-    accessKey, totpKey, recoveryVersion, proxyIp: env.PROXY_IP || false };
+    accessKey, totpKey, profileKeys, recoveryVersion, proxyIp: env.PROXY_IP || false };
 }

@@ -1,6 +1,7 @@
 import { Type as T } from '@sinclair/typebox';
 import type { Static, TSchema } from '@sinclair/typebox';
-import { cardNetworks, endpoints } from './client.ts';
+import { avatarMaxBytes, cardNetworks, endpoints } from './client.ts';
+export { avatarMaxBytes, avatarMaxPixels } from './client.ts';
 export type { CardNetwork } from './client.ts';
 
 export const language = T.Union([T.Literal('en'), T.Literal('ru')]);
@@ -22,6 +23,25 @@ const financialDate = T.String({ format: 'date', pattern: '^[1-9][0-9]{3}-[0-9]{
 const timeZone = T.String({ minLength: 1, maxLength: 64, description: 'IANA time zone identifier, for example Asia/Makassar.' });
 const profile = T.Object({ id, email, recoveryVersion, timeZone, today: financialDate,
   timeZoneConfigured: T.Boolean({ description: 'Whether the user has selected a time zone. UTC is used until then.' }) });
+const avatarJpeg = T.String({ minLength: 4, maxLength: 4 * Math.ceil(avatarMaxBytes / 3),
+  contentEncoding: 'base64', contentMediaType: 'image/jpeg' });
+const nullableText = (maxLength: number) => T.Union([T.String({ maxLength }), T.Null()]);
+const profileFields = T.Object({
+  lastName: nullableText(100), firstName: nullableText(100), patronymic: nullableText(100),
+  birthDate: T.Union([financialDate, T.Null()]),
+  passportSeries: nullableText(32), passportNumber: nullableText(64), registrationAddress: nullableText(500),
+}, { additionalProperties: false });
+const profileVersion = T.Integer({ minimum: 0, maximum: 4294967295 });
+const profileSummary = T.Object({ firstName: nullableText(100), lastName: nullableText(100), initials: nullableText(24),
+  avatarVersion: T.Union([profileVersion, T.Null()]) }, { additionalProperties: false });
+const personalProfile = T.Object({ version: profileVersion, fields: profileFields, summary: profileSummary });
+const saveProfileInput = T.Object({
+  expectedVersion: profileVersion, fields: profileFields,
+  avatarJpeg: T.Optional(T.Union([avatarJpeg, T.Null()], {
+    description: 'Omit to keep the current avatar, send null to remove it, or send a square JPEG up to 512 px and 160 KiB.',
+  })),
+}, { additionalProperties: false });
+export type ProfileFields = Static<typeof profileFields>;
 const accountName = T.String({ maxLength: 255, pattern: '\\S' });
 const balanceMinor = T.String({ pattern: '^(0|-?[1-9][0-9]*)$', description: 'Balance in minor units' });
 const signedMinor = T.String({
@@ -526,6 +546,16 @@ export const routes = {
       T.Object({ installationSecret: secret, biometricSecret: secret }, { additionalProperties: false }),
     ]), mobileSession),
   me: route(endpoints.me, 'mobile', 'Read the profile and verify the current session', empty, profile),
+  getProfileSummary: route(endpoints.getProfileSummary, 'mobile', 'Read the signed-in user’s first and last names and avatar version',
+    empty, profileSummary),
+  getPersonalProfile: route(endpoints.getPersonalProfile, 'mobile', 'Read the signed-in user’s personal data', empty, personalProfile),
+  savePersonalProfile: {
+    ...route(endpoints.savePersonalProfile, 'mobile', 'Save personal data and optionally change the avatar',
+      saveProfileInput, personalProfile),
+    description: 'All fields are nullable. New profiles start at version 0. A stale expectedVersion returns VERSION_CONFLICT. The fields and avatar change together.',
+  },
+  getProfileAvatar: route(endpoints.getProfileAvatar, 'mobile', 'Read the signed-in user’s avatar', empty,
+    T.Object({ version: profileVersion, jpeg: avatarJpeg })),
   setTimeZone: {
     ...route(endpoints.setTimeZone, 'mobile', 'Select the profile time zone', T.Object({ timeZone }, { additionalProperties: false }), profile),
     description: 'Records the selected time zone for future dates. Dates already due keep their original due time. Repeating the current selection returns the profile.',
@@ -1012,7 +1042,7 @@ export const errorCodes = [
   'IDEMPOTENCY_CONFLICT', 'COMMAND_CLOSED', 'COMMAND_REQUIRES_REVIEW', 'TEMPORARY_FAILURE',
   'VERSION_CONFLICT', 'TRANSACTION_VOID', 'ACCOUNT_BALANCE_NOT_ZERO', 'ACCOUNT_START_DATE_CONFLICT', 'SCHEDULE_DATE_CONFLICT', 'SCHEDULE_DATES_PENDING',
   'SCHEDULE_FUTURE_DATES', 'SCHEDULE_RULE_STATE_CONFLICT', 'SCHEDULE_REPLACEMENT_CONFLICT', 'TIME_ZONE_CONFLICT',
-  'STATEMENT_TOO_LARGE',
+  'STATEMENT_TOO_LARGE', 'INVALID_AVATAR', 'INVALID_BIRTH_DATE', 'PROFILE_UNAVAILABLE',
 ] as const;
 export type ErrorCode = typeof errorCodes[number];
 export const errorSchema = T.Object({

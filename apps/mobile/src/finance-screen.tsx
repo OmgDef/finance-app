@@ -36,6 +36,7 @@ import { appTabs } from './finance-tabs';
 import type { FinanceTab } from './finance-tabs';
 import { revisionFields, TransactionSummary } from './finance-transaction';
 import { FinanceAlert, FinanceButton, FinanceScrollView, palette, styles } from './finance-ui';
+import { ProfileHeader } from './profile-header';
 import { SupportScreen } from './support-screen';
 
 type Account = Result<'listAccounts'>['accounts'][number];
@@ -415,11 +416,14 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
     }
   }
 
+  const [profileRefresh, setProfileRefresh] = useState(0);
+
   function refresh() {
     if (writing) return;
     void loadAccounts();
     if (!categories || page.name === 'payments') void loadCategories();
     if (showOverview) {
+      setProfileRefresh((value) => value + 1);
       void cashFlow.load();
       void exchangeRates.load();
     }
@@ -653,6 +657,7 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
       </>}
       {page.name === 'products' && <>
         {timeZoneSuggestion}
+        <ProfileHeader focused={focused} refresh={profileRefresh} />
         {accounts && <BalanceCard accounts={activeAccounts} lang={lang} />}
         {accounts && <View style={layout.section}>
           <Text accessibilityRole="header" style={styles.section}>{t.myAccounts}</Text>
