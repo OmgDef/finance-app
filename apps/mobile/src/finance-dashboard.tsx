@@ -10,14 +10,12 @@ import { currencies, currencyName, currencySymbol, formatFinancialDate, formatMo
 import { CardNetworkLogo, cardNetworkLabel } from './finance-card-network';
 import type { Currency } from './finance-format';
 import { FinanceIcon } from './finance-icon';
-import { scheduleCopy } from './finance-schedule-copy';
 import { statisticsCopy } from './finance-statistics-copy';
 import type { StatisticsPreset } from './finance-statistics';
 import { cardTextColor, FinanceAlert, palette, styles } from './finance-ui';
 
 type Account = Result<'listAccounts'>['accounts'][number];
 type CardPreview = Result<'listAccounts'>['cardPreviews'][number];
-type Category = Result<'listCategories'>['categories'][number];
 type Quote = Result<'getExchangeRates'>['rates'][number];
 type Read<T> = { data?: T; busy: boolean; error?: string; load(): Promise<void> };
 
@@ -28,8 +26,7 @@ const labels = {
     noFlow: 'Нет операций за 90 дней.', flowError: 'Не удалось обновить движение денег.',
     rates: 'Курсы валют', source: 'Официальные курсы Банка России', ratesError: 'Не удалось обновить курсы валют.',
     cachedRates: 'Показаны сохранённые курсы.', effective: 'Действует с', change: 'К предыдущему курсу',
-    history: 'Динамика за 30 дней', nextPayment: 'Ближайший платёж', noPayment: 'Нет запланированных платежей.',
-    paymentError: 'Не удалось обновить ближайший платёж.', schedule: 'Расписание',
+    history: 'Динамика за 30 дней',
   },
   en: {
     switchBalance: 'Show balance', annual: 'per year', matures: 'until', moreCards: 'More cards',
@@ -37,8 +34,7 @@ const labels = {
     noFlow: 'No transactions in the last 90 days.', flowError: 'Could not update cash flow.',
     rates: 'Exchange rates', source: 'Official Bank of Russia rates', ratesError: 'Could not update exchange rates.',
     cachedRates: 'Showing saved rates.', effective: 'Effective from', change: 'Since the previous rate',
-    history: '30-day history', nextPayment: 'Next payment', noPayment: 'No scheduled payments.',
-    paymentError: 'Could not update the next payment.', schedule: 'Schedule',
+    history: '30-day history',
   },
 } as const;
 
@@ -264,31 +260,6 @@ export function ExchangeRatesCard({ read, lang }: { read: Read<Result<'getExchan
   </Card>;
 }
 
-export function NextPaymentCard({ read, categories, lang, onSchedule }: {
-  read: Read<Result<'getNextPayment'>>; categories?: Category[]; lang: Language;
-  onSchedule(ruleId?: string, date?: string): void;
-}) {
-  const t = labels[lang];
-  const payment = read.data?.payment;
-  const category = categories?.find(({ id }) => id === payment?.categoryId);
-  const title = payment?.source || payment?.comment || (category && (lang === 'ru' ? category.nameRu : category.nameEn)) ||
-    financeCopy[lang].expenseEntry;
-  return <Card title={t.nextPayment} style={layout.nextPaymentCard} testID="finance-dashboard-next-payment"
-    action={<CardLink title={t.schedule} onPress={() => onSchedule()} />}>
-    {payment ? <Pressable accessibilityRole="button" onPress={() => onSchedule(payment.ruleId, payment.date)}
-      style={({ pressed }) => [layout.payment, pressed && styles.dimmed]}>
-      <View style={layout.paymentIdentity}>
-        <Text style={styles.title}>{title}</Text>
-        <Text style={styles.meta}>{formatFinancialDate(payment.date, lang)}</Text>
-        {payment.status !== 'planned' && <Text style={styles.meta}>{scheduleCopy[lang][payment.status]}</Text>}
-      </View>
-      <Text style={[layout.metricValue, layout.paymentAmount]}>{formatMoney('-' + payment.amountMinor, payment.currency, lang)}</Text>
-      <FinanceIcon name="chevron" color={palette.muted} size={13} />
-    </Pressable> : read.data && <Text style={styles.meta}>{t.noPayment}</Text>}
-    <ReadStatus read={read} lang={lang} message={t.paymentError} />
-  </Card>;
-}
-
 const layout = StyleSheet.create({
   balanceCard: { backgroundColor: palette.balanceSurface, borderRadius: 20, padding: 18 },
   balanceTitle: { color: palette.balanceMuted, fontSize: 14, fontWeight: '600' },
@@ -344,8 +315,4 @@ const layout = StyleSheet.create({
   spark: { width: sparkWidth, height: sparkHeight },
   sparkGuide: { position: 'absolute', left: 0, right: 0, bottom: 0, height: StyleSheet.hairlineWidth, backgroundColor: palette.line },
   segment: { position: 'absolute', height: 2, borderRadius: 1, backgroundColor: palette.accent },
-  nextPaymentCard: { paddingTop: 7 },
-  payment: { minHeight: 44, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 7 },
-  paymentIdentity: { flexGrow: 1, flexBasis: '42%', minWidth: 100, gap: 3 },
-  paymentAmount: { flexShrink: 1, marginLeft: 'auto', textAlign: 'right' },
 });

@@ -18,7 +18,7 @@ import { apiErrorCode, useFinanceCommand } from './finance-commands';
 import type { CommandResult, FinanceAccess, FinanceCommand, TransactionFields } from './finance-commands';
 import { financeCopy } from './finance-copy';
 import type { FinanceCopyKey } from './finance-copy';
-import { BalanceCard, CashFlowCard, ExchangeRatesCard, NextPaymentCard, OverviewAccountCard } from './finance-dashboard';
+import { BalanceCard, CashFlowCard, ExchangeRatesCard, OverviewAccountCard } from './finance-dashboard';
 import { formatFinancialDate, formatMoney, formatProfileMoment, formatRate, recentStatisticsPeriod } from './finance-format';
 import { AccountForm, TransactionForm } from './finance-forms';
 import { FinanceIcon } from './finance-icon';
@@ -184,6 +184,16 @@ function useWorkspaceModel(access: FinanceAccess, lang: Language) {
     if (!destination || command.busy || !access.isCurrent()) return;
     setDestination(undefined);
     const path = financePath(destination.page);
+    if (destination.page.name === 'schedule' && pathname !== '/schedule' && !pathname.startsWith('/schedule/')) {
+      const result = destination.receipt?.result;
+      const s = scheduleCopy[lang];
+      if (result && 'occurrenceId' in result) {
+        Alert.alert(s.dateSkipped, formatFinancialDate(result.date, lang));
+      } else if (result && 'replacementRule' in result) {
+        Alert.alert(s.ruleReplaced, `${s.replacementDate} · ${formatFinancialDate(result.transitionDate, lang)}`);
+      }
+      return;
+    }
     const back = destination.returnToOrigin && router.canDismiss();
     if (destination.receipt) setReceipt({ ...destination.receipt, path,
       ...(back && { returnFrom: pathname }) });
@@ -312,8 +322,6 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
       query: new URLSearchParams({ ...recentStatisticsPeriod(throughDate), byWeek: 'true' }) }), focused);
   const exchangeRates = useFinanceRead(showOverview ? 'rates' : undefined, 0, access, () =>
     request('getExchangeRates', { token: access.token }), focused);
-  const nextPayment = useFinanceRead(showOverview ? today + ':' + timeZone : undefined, revision, access, () =>
-    request('getNextPayment', { token: access.token }), focused);
   const scroll = useRef<ComponentRef<typeof FinanceScrollView>>(null);
   const accountId = 'accountId' in page ? page.accountId : null;
   const account = accountId ? accounts?.find((entry) => entry.accountId === accountId) : undefined;
@@ -414,7 +422,6 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
     if (showOverview) {
       void cashFlow.load();
       void exchangeRates.load();
-      void nextPayment.load();
     }
     if (historyId) {
       void linkedCards.load();
@@ -472,7 +479,7 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
       case 'schedule': {
         if (page.editor) return { create: s.newRule, edit: s.edit, replace: s.replacing }[page.editor];
         if (page.skipDate) return s.skip;
-        return page.ruleId ? s.rule : s.schedule;
+        return page.ruleId ? s.rule : s.scheduleSettings;
       }
       default: return '';
     }
@@ -661,9 +668,6 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
             <Text style={styles.meta}>{t.archived}</Text>
           </Pressable>}
         </View>}
-        <NextPaymentCard read={nextPayment} categories={categories} lang={lang}
-          onSchedule={(ruleId, date) => go({ name: 'schedule', accountId: null, ruleId,
-            offset: date ? scheduleOffset(today, date) : undefined })} />
         <CashFlowCard read={cashFlow} accounts={accounts && activeAccounts} lang={lang}
           onStatistics={(preset) => router.navigate({ pathname: '/(app)/(tabs)/statistics',
             params: { ...preset, overview: String(Date.now()) } })} />
@@ -692,8 +696,7 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
         </View>}
         <PaymentsScreen access={access} lang={lang} accountCount={activeAccounts.length}
           categories={categories} blocked={blocked} focused={focused} refreshSignal={paymentsRefresh}
-          onRecord={(kind, categoryId) => go({ name: 'record', kind, accountId: null, categoryId })}
-          onSchedule={(ruleId) => go({ name: 'schedule', accountId: null, ruleId })} />
+          onRecord={(kind, categoryId) => go({ name: 'record', kind, accountId: null, categoryId })} />
       </>}
       {page.name === 'schedule' && <>
         {categoryError && <View style={layout.section}>

@@ -16,6 +16,8 @@ import { dateInTimeZone } from './finance-format';
 import { FinanceBrand, FinanceButton, palette } from './finance-ui';
 import { SettingsScreen } from './settings-screen';
 import { SupportScreen } from './support-screen';
+import { TimeZonePicker } from './time-zone-picker';
+import { timeZoneCityId, timeZoneLabel } from './time-zones';
 import { UnlockScreen } from './unlock-screen';
 import {
   clearBiometrics, clearPendingInstallation, enableScenePrivacy, forgetInstallation, hasBiometrics, initializeInstallation,
@@ -481,6 +483,18 @@ export function AccessProvider({ children }: { children: ReactNode }) {
   const deviceZone = getCalendars()[0]?.timeZone;
   const suggestedZone = deviceZone && /^[A-Za-z][A-Za-z0-9_+/-]*$/.test(deviceZone) ? deviceZone : null;
 
+  function openTimeZonePicker() {
+    if (!access || operation.current || zoneOperation.current) return;
+    setTimeZoneNotice('');
+    setTimeZoneDraft(access.profile.timeZone);
+  }
+
+  function closeTimeZonePicker() {
+    if (zoneOperation.current) return;
+    setTimeZoneNotice('');
+    setTimeZoneDraft(null);
+  }
+
   async function saveTimeZone(value: string) {
     if (!access?.isCurrent() || zoneOperation.current || operation.current) return;
     const selected = value.trim();
@@ -559,37 +573,26 @@ export function AccessProvider({ children }: { children: ReactNode }) {
   const settings = access && <SettingsScreen lang={lang} profile={access.profile} busy={busy} languageError={languageError}
     zoneEditing={timeZoneDraft !== null}
     biometricsEnabled={enabled} onLanguage={selectLanguage}
-    onTimeZone={() => {
-      setTimeZoneNotice('');
-      setTimeZoneDraft(timeZoneDraft === null ? access.profile.timeZone : null);
-    }}
+    onTimeZone={openTimeZonePicker}
     onBiometrics={() => void run(changeBiometrics)}
     onSignOut={() => void run(logout)}
     notice={biometricNotice
       ? <Text accessibilityRole="alert" style={styles.notice}>{t.errors[biometricNotice] ?? t.generic}</Text>
       : status || (biometricsReset && <Text style={styles.label}>{t.biometricSetupAgain}</Text>)}
-    zoneEditor={timeZoneDraft !== null || !!zoneMessage ? <View style={styles.settingsEditor}>
-      {timeZoneDraft !== null && <>
-        <Text style={styles.label}>{t.timeZoneIdentifier}</Text>
-        <TextInput accessibilityLabel={t.timeZoneIdentifier} value={timeZoneDraft} onChangeText={setTimeZoneDraft}
-          style={styles.input} editable={!busy} autoCorrect={false} autoCapitalize="none" maxLength={64}
-          returnKeyType="done" onSubmitEditing={() => void KeyboardController.dismiss()} testID="finance-time-zone-input" />
-        {suggestedZone && suggestedZone !== timeZoneDraft && <FinanceButton title={t.usePhoneTimeZone + ' · ' + suggestedZone}
-          onPress={() => setTimeZoneDraft(suggestedZone)} disabled={busy} />}
-        <FinanceButton title={t.saveTimeZone} onPress={() => void saveTimeZone(timeZoneDraft)} primary disabled={busy}
-          testID="finance-save-time-zone" />
-        <FinanceButton title={t.cancel} onPress={() => { setTimeZoneDraft(null); setTimeZoneNotice(''); }} disabled={busy} />
-      </>}
-      {!!zoneMessage && <Text accessibilityRole={timeZoneNotice === 'saved' ? undefined : 'alert'}
-        accessibilityLiveRegion="polite" style={timeZoneNotice === 'saved' ? styles.label : styles.notice}>{zoneMessage}</Text>}
-    </View> : undefined}
+    zoneNotice={timeZoneDraft === null && !!zoneMessage && <Text accessibilityRole={timeZoneNotice === 'saved' ? undefined : 'alert'}
+      accessibilityLiveRegion="polite" style={[styles.settingsNotice, timeZoneNotice === 'saved' ? styles.label : styles.notice]}>
+      {zoneMessage}
+    </Text>}
   />;
   const timeZoneSuggestion = access && !access.profile.timeZoneConfigured ? <View style={styles.zoneSuggestion}>
     <Text style={styles.label}>{t.timeZoneSuggestion}</Text>
-    {suggestedZone && suggestedZone !== 'UTC' && <FinanceButton title={t.usePhoneTimeZone + ' · ' + suggestedZone}
+    <FinanceButton title={t.chooseTimeZone} onPress={openTimeZonePicker} primary disabled={busy}
+      testID="finance-choose-time-zone" />
+    {suggestedZone && timeZoneCityId(suggestedZone) !== 'UTC' && <FinanceButton
+      title={t.usePhoneTimeZone + ' · ' + timeZoneLabel(suggestedZone, lang)}
       onPress={() => void saveTimeZone(suggestedZone)} disabled={busy} testID="finance-suggest-time-zone" />}
     <FinanceButton title={t.keepUtc} onPress={() => void saveTimeZone('UTC')} disabled={busy} testID="finance-suggest-utc" />
-    {!!zoneMessage && <Text accessibilityRole="alert" style={styles.notice}>{zoneMessage}</Text>}
+    {timeZoneDraft === null && !!zoneMessage && <Text accessibilityRole="alert" style={styles.notice}>{zoneMessage}</Text>}
   </View> : undefined;
 
   const showsUnlockScreen = mode === 'unlock' || mode === 'verify';
@@ -650,6 +653,9 @@ export function AccessProvider({ children }: { children: ReactNode }) {
     restoreSettings: settingsFocused.current, setSettingsFocused: (focused) => { settingsFocused.current = focused; },
     startupReady, setSplashHidden, showsUnlockScreen, timeZoneSuggestion, signedOut }}>
     {children}
+    {access && timeZoneDraft !== null && <TimeZonePicker lang={lang} current={access.profile.timeZone} device={suggestedZone}
+      selected={timeZoneDraft} busy={busy} error={zoneMessage}
+      onSelect={setTimeZoneDraft} onSave={() => void saveTimeZone(timeZoneDraft)} onClose={closeTimeZonePicker} />}
   </AccessContext>;
 }
 
@@ -688,5 +694,5 @@ const styles = StyleSheet.create({
   disabled: { opacity: 0.55 }, notice: { color: palette.danger, fontSize: 15 },
   support: { paddingVertical: 12, borderTopWidth: 1, borderColor: palette.line },
   zoneSuggestion: { gap: 8, padding: 12, backgroundColor: palette.panel, borderRadius: 12, borderWidth: 1, borderColor: palette.line },
-  settingsEditor: { gap: 8, paddingHorizontal: 12, paddingBottom: 12 },
+  settingsNotice: { paddingHorizontal: 12, paddingBottom: 12 },
 });

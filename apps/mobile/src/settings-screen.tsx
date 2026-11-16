@@ -9,7 +9,9 @@ import { copy } from './copy';
 import { financeCopy } from './finance-copy';
 import { FinanceIcon } from './finance-icon';
 import type { FinanceIconName } from './finance-icon';
+import { scheduleCopy } from './finance-schedule-copy';
 import { FinanceAlert, FinanceBrand, palette, styles } from './finance-ui';
+import { timeZoneLabel } from './time-zones';
 
 const languageNames = { ru: 'Русский', en: 'English' } as const;
 
@@ -33,20 +35,27 @@ function AppInfo({ lang }: { lang: Language }) {
   </View>;
 }
 
-export function AccountSettingsLink({ lang, onPress }: { lang: Language; onPress: () => void }) {
+export function FinanceSettingsLinks({ lang, onAccounts, onSchedule }: {
+  lang: Language;
+  onAccounts: () => void;
+  onSchedule: () => void;
+}) {
   return <View style={styles.surface}>
-    <SettingRow icon="wallet" title={financeCopy[lang].manageAccounts} onPress={onPress} testID="finance-account-settings" />
+    <SettingRow icon="wallet" title={financeCopy[lang].manageAccounts} onPress={onAccounts} testID="finance-account-settings" />
+    <View style={layout.divider}>
+      <SettingRow icon="calendar" title={scheduleCopy[lang].scheduleSettings} onPress={onSchedule} testID="finance-schedule-settings" />
+    </View>
   </View>;
 }
 
-export function SettingsScreen({ lang, profile, busy, languageError, zoneEditing, zoneEditor, notice,
+export function SettingsScreen({ lang, profile, busy, languageError, zoneEditing, zoneNotice, notice,
   biometricsEnabled, onLanguage, onTimeZone, onBiometrics, onSignOut }: {
   lang: Language;
   profile: Result<'me'>;
   busy: boolean;
   languageError: boolean;
   zoneEditing: boolean;
-  zoneEditor?: ReactNode;
+  zoneNotice?: ReactNode;
   notice?: ReactNode;
   biometricsEnabled: boolean;
   onLanguage: (language: Language) => void;
@@ -69,11 +78,11 @@ export function SettingsScreen({ lang, profile, busy, languageError, zoneEditing
           </View>
         </View>
         <View style={layout.divider}>
-          <SettingRow icon="clock" title={t.timeZone} hint={t.editTimeZone} value={profile.timeZone}
+          <SettingRow icon="clock" title={t.timeZone} hint={t.editTimeZone} value={timeZoneLabel(profile.timeZone, lang)}
             valueID="finance-current-time-zone" onPress={onTimeZone} expanded={zoneEditing}
             disabled={busy}
             testID="finance-edit-time-zone" />
-          {zoneEditor}
+          {zoneNotice}
         </View>
       </View>
     </View>

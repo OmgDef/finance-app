@@ -6,7 +6,7 @@ import { useAccessSession } from '../../../src/access-session';
 import { copy } from '../../../src/copy';
 import { useFinanceWorkspace } from '../../../src/finance-screen';
 import { FinanceScrollView, styles } from '../../../src/finance-ui';
-import { AccountSettingsLink } from '../../../src/settings-screen';
+import { FinanceSettingsLinks } from '../../../src/settings-screen';
 
 export default function Settings() {
   const { access, lang, settings, clearSettingsDraft, setSettingsFocused } = useAccessSession();
@@ -26,7 +26,8 @@ export default function Settings() {
   return <SafeAreaView edges={['top', 'left', 'right']} style={{ flex: 1 }}>
     <FinanceScrollView nativeTab bottomOffset={12} keyboardDismissMode="on-drag" keyboardShouldPersistTaps="handled">
       <Text accessibilityRole="header" style={styles.heading}>{copy[lang].settings}</Text>
-      <AccountSettingsLink lang={lang} onPress={() => go({ name: 'accountSettings' })} />
+      <FinanceSettingsLinks lang={lang} onAccounts={() => go({ name: 'accountSettings' })}
+        onSchedule={() => go({ name: 'schedule', accountId: null, section: 'rules' })} />
       {settings}
     </FinanceScrollView>
   </SafeAreaView>;

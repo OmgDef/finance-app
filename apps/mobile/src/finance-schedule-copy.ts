@@ -2,7 +2,7 @@ import type { Language } from '@teta/contracts';
 
 export const scheduleCopy = {
   en: {
-    payments: 'Payments', newEntry: 'New entry', schedule: 'Scheduled', openSchedule: 'Open schedule',
+    payments: 'Payments', newEntry: 'New entry', schedule: 'Scheduled', scheduleSettings: 'Schedule settings',
     filterByAccount: 'Filter by account', allAccounts: 'All accounts',
     noUpcoming: 'No upcoming entries in this period.', dates: 'Scheduled dates', rules: 'Rules',
     newRule: 'New rule', edit: 'Edit rule', pause: 'Pause rule', resume: 'Resume rule', end: 'End rule',
@@ -36,7 +36,7 @@ export const scheduleCopy = {
     unavailable: 'This rule or account is no longer available.', noAccount: 'Add an account before creating a rule.',
   },
   ru: {
-    payments: 'Платежи', newEntry: 'Новая запись', schedule: 'Запланировано', openSchedule: 'Открыть график',
+    payments: 'Платежи', newEntry: 'Новая запись', schedule: 'Запланировано', scheduleSettings: 'Настройки расписания',
     filterByAccount: 'Фильтр по счёту', allAccounts: 'Все счета',
     noUpcoming: 'В этом периоде нет предстоящих операций.', dates: 'Даты графика', rules: 'Правила',
     newRule: 'Новое правило', edit: 'Изменить правило', pause: 'Приостановить правило', resume: 'Возобновить правило',

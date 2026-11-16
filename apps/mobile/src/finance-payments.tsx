@@ -34,7 +34,7 @@ function categoryRank(id: string) {
   return id === 'other-expense' ? 2 : 1;
 }
 
-export function PaymentsScreen({ access, lang, accountCount, categories, blocked, focused, refreshSignal, onRecord, onSchedule }: {
+export function PaymentsScreen({ access, lang, accountCount, categories, blocked, focused, refreshSignal, onRecord }: {
   access: FinanceAccess;
   lang: Language;
   accountCount: number;
@@ -43,7 +43,6 @@ export function PaymentsScreen({ access, lang, accountCount, categories, blocked
   focused: boolean;
   refreshSignal: number;
   onRecord: (kind: TransactionFields['type'], categoryId?: string) => void;
-  onSchedule: (ruleId?: string) => void;
 }) {
   const t = financeCopy[lang];
   const s = scheduleCopy[lang];
@@ -104,14 +103,7 @@ export function PaymentsScreen({ access, lang, accountCount, categories, blocked
       </View>
     </View>
     <View style={layout.section}>
-      <View style={layout.sectionHeader}>
-        <Text accessibilityRole="header" style={styles.section}>{s.schedule}</Text>
-        <Pressable accessibilityRole="button" onPress={() => onSchedule()} testID="finance-payments-schedule"
-          style={({ pressed }) => [layout.link, pressed && styles.dimmed]}>
-          <Text style={layout.linkText}>{s.openSchedule}</Text>
-          <FinanceIcon name="chevron" color={palette.accent} size={14} />
-        </Pressable>
-      </View>
+      <Text accessibilityRole="header" style={styles.section}>{s.schedule}</Text>
       <View style={styles.surface}>
         {!active && <ActivityIndicator style={layout.message} color={palette.accent} accessibilityLabel={t.loading} />}
         {active && 'error' in active && <View style={layout.message}>
@@ -128,10 +120,9 @@ export function PaymentsScreen({ access, lang, accountCount, categories, blocked
           const primary = source ?? title;
           const secondary = source ? `${title} · ${status}` : status;
           const amount = formatMoney(entry.kind === 'expense' ? '-' + entry.amountMinor : entry.amountMinor, entry.currency, lang, true);
-          return <Pressable key={entry.ruleId + ':' + entry.date} accessibilityRole="button"
+          return <View key={entry.ruleId + ':' + entry.date} accessible accessibilityRole="text"
             accessibilityLabel={[formatFinancialDate(entry.date, lang), primary, secondary, amount].join(', ')}
-            onPress={() => onSchedule(entry.ruleId)}
-            style={({ pressed }) => [layout.entry, index > 0 && layout.divider, pressed && layout.pressed]}>
+            style={[layout.entry, index > 0 && layout.divider]}>
             <View style={layout.entryIdentity}>
               <View style={layout.date}>
                 <Text style={layout.day}>{Number(entry.date.slice(-2))}</Text>
@@ -143,7 +134,7 @@ export function PaymentsScreen({ access, lang, accountCount, categories, blocked
               </View>
             </View>
             <Text style={[layout.amount, entry.kind === 'income' && layout.income]}>{amount}</Text>
-          </Pressable>;
+          </View>;
         })}
       </View>
     </View>
@@ -169,9 +160,6 @@ export function PaymentsScreen({ access, lang, accountCount, categories, blocked
 const layout = StyleSheet.create({
   page: { gap: 20 },
   section: { gap: 4 },
-  sectionHeader: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', columnGap: 12 },
-  link: { flexDirection: 'row', alignItems: 'center', gap: 4, minHeight: 44, flexShrink: 1 },
-  linkText: { color: palette.accent, fontSize: 14, fontWeight: '600', flexShrink: 1 },
   categorySection: { gap: 10 },
   shortcuts: { gap: 8 },
   shortcutsGrid: { flexDirection: 'row', flexWrap: 'wrap' },
