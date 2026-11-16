@@ -15,7 +15,7 @@ export default {
   plugins: [
     'expo-router',
     bootsplash({
-      logo: appIconForeground,
+      logo: './assets/app-icon/splash-logo.png',
       logoWidth: 134,
       background: brandBlue,
       assetsOutput: '.expo/bootsplash',
