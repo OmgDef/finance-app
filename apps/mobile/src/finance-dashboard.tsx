@@ -3,6 +3,7 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, View, useWindowDimensio
 import type { StyleProp, ViewStyle } from 'react-native';
 import type { ReactNode } from 'react';
 import type { Language, Result } from '@teta/contracts';
+import { appVariant } from './app-variant';
 import { copy } from './copy';
 import { cashFlowSeries, cashFlowWeeks, WeeklyCashFlowPlot } from './finance-cash-flow';
 import { financeCopy } from './finance-copy';
@@ -46,6 +47,20 @@ export function BalanceCard({ accounts, lang }: { accounts: Account[]; lang: Lan
   const totals: Record<Currency, bigint> = { RUB: 0n, USD: 0n, EUR: 0n };
   for (const { currency, balanceMinor } of accounts) totals[currency] += BigInt(balanceMinor);
   const amount = (currency: Currency) => formatMoney(String(totals[currency]), currency, lang);
+
+  if (appVariant === 'b') {
+    return <View style={[styles.surface, layout.walletBalance]} testID="finance-dashboard-balances">
+      <Text accessibilityRole="header" style={styles.section}>{financeCopy[lang].balances}</Text>
+      <Text style={layout.walletMainBalance} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.35}
+        testID="finance-dashboard-main-balance">{amount(primary)}</Text>
+      {alternatives.map((currency) => <View key={currency} style={layout.walletCurrencyRow}
+        testID={'finance-dashboard-balance-' + currency}>
+        <Text style={styles.meta}>{currencyName(currency, lang)}</Text>
+        <Text style={layout.walletCurrencyValue}>{amount(currency)}</Text>
+      </View>)}
+    </View>;
+  }
+
   const stack = (Math.min(width, 540) - 74) / fontScale < 218 ||
     alternatives.some((currency) => amount(currency).length > 16);
 
@@ -261,6 +276,11 @@ export function ExchangeRatesCard({ read, lang }: { read: Read<Result<'getExchan
 }
 
 const layout = StyleSheet.create({
+  walletBalance: { paddingHorizontal: 18, paddingVertical: 16, gap: 8 },
+  walletMainBalance: { ...styles.heroValue, color: palette.accent, fontSize: 40, letterSpacing: -1, marginBottom: 6 },
+  walletCurrencyRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'baseline', justifyContent: 'space-between',
+    borderTopColor: palette.line, borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 9, columnGap: 12, rowGap: 3 },
+  walletCurrencyValue: { ...styles.value, fontSize: 17, marginLeft: 'auto', textAlign: 'right' },
   balanceCard: { backgroundColor: palette.balanceSurface, borderRadius: 20, padding: 18 },
   balanceTitle: { color: palette.balanceMuted, fontSize: 14, fontWeight: '600' },
   balanceValue: { color: palette.panel, fontSize: 40, fontWeight: '600', letterSpacing: -1.2,

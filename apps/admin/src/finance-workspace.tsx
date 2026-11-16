@@ -6,7 +6,7 @@ import type { Currency } from '@teta/contracts/money';
 import { api, errorCode } from './api';
 import type { AdminCommands } from './commands';
 import { financeWords } from './finance-copy';
-import { categoryLabel, dateLabel, EditorHeading, Failure, firstFinancialDate, lastFinancialDate, LabeledInput,
+import { categoryLabel, ConfirmDeletion, dateLabel, EditorHeading, Failure, firstFinancialDate, lastFinancialDate, LabeledInput,
   transactionAmountClass, useAmount, useQuery } from './finance-ui';
 import type { Account, Category, Session } from './finance-ui';
 import { AdminLink, adminPaths, navigate } from './navigation';
@@ -29,7 +29,7 @@ export function FinanceWorkspace({ owner, route, session, lang, commands, onExpi
   const { id: userId } = owner;
   const ledger = useQuery(userId, (signal) => api('adminListAccounts', { params: { userId }, signal }), onExpired);
   const catalog = useQuery(session.id, (signal) => api('adminListCategories', { signal }), onExpired);
-  const [editor, setEditor] = useState<AccountEdit | 'create' | 'reconcile'>();
+  const [editor, setEditor] = useState<AccountEdit | 'create' | 'reconcile' | 'delete'>();
   const [refresh, setRefresh] = useState(0);
   const [operation, setOperation] = useState(false);
   const [feedback, setFeedback] = useState<{ accountId: string; error?: string;
@@ -56,6 +56,10 @@ export function FinanceWorkspace({ owner, route, session, lang, commands, onExpi
     if (editor === 'create' && outcome.reference.command === 'account.create' && 'startDate' in outcome.result) {
       setEditor(undefined);
       navigate(adminPaths.account(userId, outcome.result.accountId));
+    }
+    if (outcome.reference.command === 'account.delete' && outcome.reference.accountId === account?.accountId) {
+      setEditor(undefined);
+      navigate(adminPaths.finance(userId), true);
     }
   }, [committed]);
   useEffect(() => {
@@ -126,6 +130,7 @@ export function FinanceWorkspace({ owner, route, session, lang, commands, onExpi
               <button disabled={disabled} onClick={() => setEditor('rename')}>{t.rename}</button>
               <button disabled={disabled} onClick={() => setEditor('changeStartDate')}>{t.changeStartDate}</button></>}
             <button disabled={disabled} onClick={() => void archive()}>{account.archived ? t.restore : t.archive}</button>
+            <button type="button" className="destructive" disabled={disabled} onClick={() => setEditor('delete')}>{t.deleteAccount}</button>
           </div>
           {feedback?.accountId === account.accountId && feedback.error && <Failure code={feedback.error} lang={lang} />}
           {feedback?.accountId === account.accountId && feedback.notice && <p role="status" className="muted">{t[feedback.notice]}</p>}
@@ -138,6 +143,10 @@ export function FinanceWorkspace({ owner, route, session, lang, commands, onExpi
               reloadLedger();
             }} />
         </EditorHeading>}
+        {editor === 'delete' && <EditorHeading title={t.deleteAccount} onClose={() => setEditor(undefined)}>
+          <DeleteAccount key={account.accountId} account={account} userId={userId} session={session} commands={commands}
+            lang={lang} disabled={disabled} onCancel={() => setEditor(undefined)} onRefresh={reloadLedger} />
+        </EditorHeading>}
         {editor === 'reconcile' && <EditorHeading title={t.reconcile} onClose={() => setEditor(undefined)}>
           <ReconciliationEditor key={account.accountId} account={account} userId={userId} today={data.today}
             categories={catalog.data?.categories ?? []} session={session} commands={commands} lang={lang}
@@ -149,12 +158,86 @@ export function FinanceWorkspace({ owner, route, session, lang, commands, onExpi
             categories={catalog.data?.categories ?? []} session={session} commands={commands} lang={lang}
             onExpired={onExpired} onConflict={reloadLedger} />
         </EditorHeading>}
+        <AccountCards key={account.accountId} accountId={account.accountId} userId={userId}
+          session={session} lang={lang} disabled={disabled} onExpired={onExpired} />
         <AccountHistory key={account.accountId} accountId={account.accountId} userId={userId} lang={lang} refresh={refresh}
           categories={catalog.data?.categories ?? []} onExpired={onExpired} />
         </>}
       </section>}
     </div>}
   </div>;
+}
+
+function DeleteAccount({ account, userId, session, commands, lang, disabled, onCancel, onRefresh }: {
+  account: Account; userId: string; session: Session; commands: AdminCommands; lang: Language; disabled: boolean;
+  onCancel: () => void; onRefresh: () => void;
+}) {
+  const t = financeWords[lang];
+  const [error, setError] = useState('');
+
+  async function remove(reason: string) {
+    setError('');
+    const params = { userId, accountId: account.accountId };
+    try {
+      await commands.submit({ ...params, command: 'account.delete' }, (idempotencyKey) =>
+        api('adminDeleteAccount', { params, csrf: session.csrf,
+          body: { idempotencyKey, expectedAccountVersion: account.accountVersion, reason } }));
+    } catch (failure) {
+      const code = errorCode(failure);
+      setError(code);
+      if (code === 'VERSION_CONFLICT' || code === 'NOT_FOUND') onRefresh();
+    }
+  }
+
+  return <ConfirmDeletion label={t.deleteAccount} message={t.confirmDeleteAccount} lang={lang} disabled={disabled}
+    feedback={error === 'ACCOUNT_UNAVAILABLE' ? <p role="alert" className="error">{t.deleteAccountArchivedLink}</p>
+      : error && <Failure code={error} lang={lang} />} onConfirm={(reason) => void remove(reason)} onCancel={onCancel} />;
+}
+
+function AccountCards({ accountId, userId, session, lang, disabled, onExpired }: {
+  accountId: string; userId: string; session: Session; lang: Language; disabled: boolean; onExpired: () => void;
+}) {
+  const t = financeWords[lang];
+  const params = { userId, accountId };
+  const cards = useQuery(accountId, (signal) => api('adminListAccountCards', { params, signal }), onExpired);
+  const [busy, setBusy] = useState(false);
+  const [feedback, setFeedback] = useState<{ error?: string; deleted?: boolean }>();
+  const entries = (cards.data ?? cards.previous)?.cards;
+
+  async function remove(cardId: string, label: string) {
+    if (disabled || busy || !cards.data || !window.confirm(`${t.confirmDeleteCard}\n\n${label}`)) return;
+    setBusy(true);
+    setFeedback(undefined);
+    try {
+      await api('adminDeleteAccountCard', { params: { ...params, cardId }, csrf: session.csrf });
+      setFeedback({ deleted: true });
+    } catch (failure) {
+      const code = errorCode(failure);
+      if (code === 'ADMIN_AUTH_INVALID') onExpired();
+      else setFeedback({ error: code });
+    } finally {
+      setBusy(false);
+      cards.reload();
+    }
+  }
+
+  return <section className="ledger-history" aria-label={t.cards}>
+    <h3>{t.cards}</h3>
+    {cards.error && <Failure code={cards.error} lang={lang} retry={cards.reload} />}
+    {feedback?.error && <Failure code={feedback.error} lang={lang} />}
+    {feedback?.deleted && <p role="status" className="muted">{t.cardDeleted}</p>}
+    {!entries && !cards.error && <p role="status" className="muted">{t.loading}</p>}
+    {entries && (entries.length ? <div className="history-list">
+      {entries.map(({ cardId, name, lastFour }) => {
+        const label = lastFour ? `${name} · •••• ${lastFour}` : name;
+        return <div key={cardId} className="history-row">
+          <strong className="history-description">{label}</strong>
+          <button type="button" className="destructive" disabled={disabled || busy || !cards.data}
+            aria-label={`${t.deleteCard} ${label}`} onClick={() => void remove(cardId, label)}>{t.deleteCard}</button>
+        </div>;
+      })}
+    </div> : <p className="finance-empty">{t.noCards}</p>)}
+  </section>;
 }
 
 function CreateAccount({ today, userId, session, lang, commands, disabled }: {

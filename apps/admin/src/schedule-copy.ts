@@ -4,6 +4,8 @@ export const scheduleWords = {
   en: {
     open: 'Schedule', title: 'Payment schedule', back: 'Back to account', rules: 'Payment rules', dates: 'Scheduled dates',
     create: 'New rule', edit: 'Edit rule', pause: 'Pause rule', resume: 'Resume rule', end: 'End rule', replace: 'Replace rule',
+    delete: 'Delete rule', confirmDelete: 'The rule and every transaction it created will be deleted. Account balances will be recalculated.',
+    deleted: 'Rule deleted.',
     noneRules: 'No payment rules for this account.', noneDates: 'No scheduled dates in this period.',
     onlyFailures: 'Needs intervention only', noneFailures: 'No dates need intervention in this period.',
     active: 'Active', paused: 'Paused', ended: 'Ended', planned: 'Planned', due: 'Due', posted: 'Posted', skipped: 'Skipped',
@@ -29,6 +31,8 @@ export const scheduleWords = {
     open: 'График', title: 'График платежей', back: 'К счёту', rules: 'Правила графика', dates: 'Даты графика',
     create: 'Новое правило', edit: 'Изменить правило', pause: 'Приостановить правило', resume: 'Возобновить правило',
     end: 'Завершить правило', replace: 'Заменить правило',
+    delete: 'Удалить правило', confirmDelete: 'Правило и все созданные им транзакции будут удалены. Остатки по счетам пересчитаются.',
+    deleted: 'Правило удалено.',
     noneRules: 'Для этого счёта нет правил.', noneDates: 'В этом периоде нет дат графика.',
     onlyFailures: 'Только требующие вмешательства', noneFailures: 'В этом периоде нет дат, требующих вмешательства.',
     active: 'Активно', paused: 'На паузе', ended: 'Завершено', planned: 'Запланировано', due: 'Ожидает проведения',

@@ -10,11 +10,11 @@ import { categoryLabel, dateLabel, EditorHeading, Failure, firstFinancialDate, l
 import type { Account, Category, Session } from './finance-ui';
 import { AdminLink, adminPaths, navigate } from './navigation';
 import { scheduleWords } from './schedule-copy';
-import { ReplacementEditor, RuleEditor, utcMoment } from './schedule-rule-editor';
+import { DeleteRuleEditor, ReplacementEditor, RuleEditor, utcMoment } from './schedule-rule-editor';
 
 type Rule = Result<'adminGetScheduleRule'>;
 type Entry = Result<'adminListScheduleOccurrences'>['occurrences'][number];
-type Editor = 'create' | 'edit' | 'pause' | 'resume' | 'end' | 'replace';
+type Editor = 'create' | 'edit' | 'pause' | 'resume' | 'end' | 'replace' | 'delete';
 type DateAction = { key: string; mode: 'skip' | 'retry'; revision: string };
 type Range = { fromDate: string; throughDate: string };
 
@@ -50,8 +50,9 @@ export function ScheduleWorkspace({ account, accounts, userId, today, timeZone, 
   const entries = (calendar.data ?? calendar.previous)?.occurrences;
   const rows = onlyFailures ? entries?.filter(({ status }) => status === 'needs_intervention') : entries;
   const commandBlocked = !commands.ready || commands.busy || !!commands.pending;
-  const canChange = !!ruleQuery.data && !commandBlocked && rule?.state !== 'ended' && !rule?.recoveryHeld &&
+  const canDelete = !!ruleQuery.data && !commandBlocked && !rule?.recoveryHeld &&
     !!ruleAccount && !ruleAccount.archived;
+  const canChange = canDelete && rule?.state !== 'ended';
   const activeOutcome = commands.outcome;
   const handled = useRef(activeOutcome?.reference.idempotencyKey);
   const schedulePath = (id?: string) => adminPaths.schedule(userId, account.accountId, id);
@@ -76,6 +77,10 @@ export function ScheduleWorkspace({ account, accounts, userId, today, timeZone, 
     if (reference.command === 'schedule.skip' && 'occurrenceId' in result) {
       setAction(undefined);
       calendar.reload();
+    }
+    if (reference.command === 'schedule.delete') {
+      if (reference.ruleId === ruleId) navigate(schedulePath(), true);
+      else refresh();
     }
   }, [activeOutcome]);
   useEffect(() => {
@@ -148,12 +153,14 @@ export function ScheduleWorkspace({ account, accounts, userId, today, timeZone, 
             <span className="muted">{dateLabel(rule.replacedBy.transitionDate, lang)} · {utcMoment(rule.replacedBy.transitionAt, lang)}</span>
           </div>}
         </div>}
-        {rule.state !== 'ended' && !ruleAccount?.archived && <div className="row-actions">
-          {(['edit', rule.state === 'paused' ? 'resume' : 'pause', 'end', 'replace'] as const).map((name) =>
+        {!ruleAccount?.archived && <div className="row-actions">
+          {rule.state !== 'ended' && (['edit', rule.state === 'paused' ? 'resume' : 'pause', 'end', 'replace'] as const).map((name) =>
             <button type="button" key={name}
               disabled={!canChange || ((name === 'edit' || name === 'replace') && !categories) ||
                 (name === 'replace' && !!rule.replaces && rule.replaces.transitionAt > Date.now())}
               onClick={() => { setEditor(name); setNotice(undefined); }}>{t[name]}</button>)}
+          <button type="button" className="schedule-attention" disabled={!canDelete}
+            onClick={() => { setEditor('delete'); setNotice(undefined); }}>{t.delete}</button>
         </div>}
       </div>}
     </div> : <section className="schedule-stack" aria-label={t.rules}>
@@ -178,7 +185,11 @@ export function ScheduleWorkspace({ account, accounts, userId, today, timeZone, 
         userId={userId} session={session} lang={lang} disabled={!canChange} onExpired={onExpired} commands={commands}
         onCancel={() => setEditor(undefined)} onRefresh={refresh} />
     </EditorHeading>}
-    {editor && editor !== 'replace' && ruleAccount && categories && <EditorHeading title={t[editor]} onClose={() => setEditor(undefined)}>
+    {editor === 'delete' && rule && <EditorHeading title={t.delete} onClose={() => setEditor(undefined)}>
+      <DeleteRuleEditor key={rule.ruleId} rule={rule} userId={userId} session={session} lang={lang} commands={commands}
+        disabled={!canDelete} onCancel={() => setEditor(undefined)} onRefresh={refresh} />
+    </EditorHeading>}
+    {editor && editor !== 'replace' && editor !== 'delete' && ruleAccount && categories && <EditorHeading title={t[editor]} onClose={() => setEditor(undefined)}>
       <RuleEditor key={editor} action={editor} rule={rule} account={ruleAccount}
         categories={categories} today={today} userId={userId} session={session} lang={lang}
         disabled={editor === 'create' ? commandBlocked || ruleAccount.archived === true : !canChange}

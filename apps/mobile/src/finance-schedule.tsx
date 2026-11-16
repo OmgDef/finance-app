@@ -118,8 +118,9 @@ export function ScheduleScreen({ page, access, accounts, categories, lang, disab
     }
   }
   const mustRefresh = !!writeError && writeError !== 'INVALID_REQUEST';
-  const mayWrite = !disabled && !saving && !busy && !readError && !mustRefresh && !!selectedRule && !!selectedAccount &&
-    !selectedAccount.archived && !selectedRule.recoveryHeld && selectedRule.state !== 'ended';
+  const mayDelete = !disabled && !saving && !busy && !readError && !mustRefresh && !!selectedRule && !!selectedAccount &&
+    !selectedAccount.archived && !selectedRule.recoveryHeld;
+  const mayWrite = mayDelete && selectedRule.state !== 'ended';
   const categoryName = (id: string) => {
     const category = categories?.find((item) => item.id === id);
     return category ? (lang === 'ru' ? category.nameRu : category.nameEn) : undefined;
@@ -163,6 +164,11 @@ export function ScheduleScreen({ page, access, accounts, categories, lang, disab
     else setBusy(false);
     return () => { reading.current += 1; };
   }, [viewKey, visible, refreshVersion, refreshSignal]);
+
+  useEffect(() => {
+    if (ruleId && !editing && (commandError === 'VERSION_CONFLICT' || commandError === 'NOT_FOUND' ||
+        commandError === 'SCHEDULE_RULE_STATE_CONFLICT')) void load();
+  }, [commandError]);
 
   function show(next: SchedulePage) {
     reading.current += 1;
@@ -219,6 +225,17 @@ export function ScheduleScreen({ page, access, accounts, categories, lang, disab
       { text: copy[lang].cancel, style: 'cancel' },
       { text: label, ...(action === 'end' && { style: 'destructive' as const }),
         onPress: () => void save({ action, expectedRuleVersion: selectedRule.ruleVersion }) },
+    ]);
+  }
+
+  function confirmDelete() {
+    if (!selectedRule || !mayDelete) return;
+    Alert.alert(t.deleteRule, t.confirmDelete, [
+      { text: copy[lang].cancel, style: 'cancel' },
+      { text: t.deleteRule, style: 'destructive', onPress: () => {
+        if (isCurrent()) onSubmit({ kind: 'schedule.delete', ruleId: selectedRule.ruleId,
+          body: { expectedRuleVersion: selectedRule.ruleVersion } });
+      } },
     ]);
   }
 
@@ -302,16 +319,19 @@ export function ScheduleScreen({ page, access, accounts, categories, lang, disab
             testID={'schedule-linked-' + link.ruleId} />
           <Text style={styles.meta}>{t.transition} {formatFinancialDate(link.transitionDate, lang)} · {formatProfileMoment(link.transitionAt, timeZone, lang)}</Text>
         </View>)}
-      {selectedRule.state !== 'ended' && !selectedAccount?.archived && <View style={layout.actions}>
-        <FinanceButton title={t.edit} onPress={() => show({ ...page, editor: 'edit' })}
-          disabled={!mayWrite} testID="schedule-edit" />
-        <FinanceButton title={t.replace} onPress={() => show({ ...page, editor: 'replace' })}
-          disabled={!mayWrite || (selectedRule.replaces !== undefined && selectedRule.replaces.transitionAt > Date.now())}
-          testID="schedule-replace" />
-        {selectedRule.state === 'active'
-          ? <FinanceButton title={t.pause} onPress={() => change('pause')} disabled={!mayWrite} testID="schedule-pause" />
-          : <FinanceButton title={t.resume} onPress={() => change('resume')} disabled={!mayWrite} testID="schedule-resume" />}
-        <FinanceButton title={t.end} onPress={() => change('end')} disabled={!mayWrite} testID="schedule-finish" />
+      {!selectedAccount?.archived && <View style={layout.actions}>
+        {selectedRule.state !== 'ended' && <>
+          <FinanceButton title={t.edit} onPress={() => show({ ...page, editor: 'edit' })}
+            disabled={!mayWrite} testID="schedule-edit" />
+          <FinanceButton title={t.replace} onPress={() => show({ ...page, editor: 'replace' })}
+            disabled={!mayWrite || (selectedRule.replaces !== undefined && selectedRule.replaces.transitionAt > Date.now())}
+            testID="schedule-replace" />
+          {selectedRule.state === 'active'
+            ? <FinanceButton title={t.pause} onPress={() => change('pause')} disabled={!mayWrite} testID="schedule-pause" />
+            : <FinanceButton title={t.resume} onPress={() => change('resume')} disabled={!mayWrite} testID="schedule-resume" />}
+          <FinanceButton title={t.end} onPress={() => change('end')} disabled={!mayWrite} testID="schedule-finish" />
+        </>}
+        <FinanceButton title={t.deleteRule} onPress={confirmDelete} disabled={!mayDelete} destructive testID="schedule-delete" />
       </View>}
     </View>}
     {!editing && (ruleId || section === 'dates') && <>

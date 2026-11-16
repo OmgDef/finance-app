@@ -11,7 +11,7 @@ import { AccessError } from './errors.ts';
 import { normalizeTransactionSource, transactionSourceFields } from './transaction-source.ts';
 import {
   checkScheduleForArchive, readAccountScheduleDates, recordReconciliationSkips, recordScheduleFailure, scheduleSelectionFingerprint,
-  settleScheduleDate, validateReconciliationDates,
+  requireScheduleRuleAccount, settleScheduleDate, validateReconciliationDates,
 } from './schedule.ts';
 import type { ScheduleCandidate, ScheduleFailureCode } from './schedule.ts';
 
@@ -49,7 +49,7 @@ const minMinor = -9223372036854775808n;
 const postedMovementsFor = (accountId: SQL) => sql`FROM movements m
   JOIN transactions t ON t.id = m.transaction_id AND t.current_version = m.transaction_version
   JOIN transaction_versions v ON v.transaction_id = m.transaction_id AND v.version = m.transaction_version
-  WHERE m.account_id = ${accountId} AND v.status = 'posted'`;
+  WHERE m.account_id = ${accountId} AND v.status = 'posted' AND t.deleted_at IS NULL`;
 const currentPostedMovements = postedMovementsFor(sql`a.id`);
 const accountBalanceMinor = sql`a.opening_balance_minor + COALESCE((
   SELECT SUM(m.amount_minor) ${currentPostedMovements}
@@ -76,7 +76,8 @@ function formatAccountBalance(account: AccountRow): AccountBalance {
 }
 
 export async function getAccountBalance(tx: Tx, userId: string, accountId: string): Promise<AccountBalance> {
-  const account = await one<AccountRow>(tx, sql`${accountBalances} WHERE a.id = ${accountId} AND a.user_id = ${userId}`);
+  const account = await one<AccountRow>(tx, sql`${accountBalances}
+    WHERE a.id = ${accountId} AND a.user_id = ${userId} AND a.deleted_at IS NULL`);
   if (!account) throw new AccessError(404, 'NOT_FOUND');
   return formatAccountBalance(account);
 }
@@ -101,7 +102,7 @@ export async function readAccountStatement(tx: Tx, userId: string, accountId: st
   const data = await rows<StatementAccount & (StatementEntry | { kind: null })>(tx, sql`
     WITH owned_account AS (
       SELECT id, name, currency, start_date, opening_balance_minor FROM accounts
-      WHERE id = ${accountId} AND user_id = ${userId}
+      WHERE id = ${accountId} AND user_id = ${userId} AND deleted_at IS NULL
     ), eligible_account AS (
       SELECT id FROM owned_account WHERE start_date <= ${fromDate}
     ), ledger AS (
@@ -160,7 +161,7 @@ export async function getAccountBalanceSeries(tx: Tx, userId: string, accountId:
   const changes = await rows<DailyChange>(tx, sql`
     WITH owned_account AS (
       SELECT id, version, currency, start_date, opening_balance_minor FROM accounts
-      WHERE id = ${accountId} AND user_id = ${userId}
+      WHERE id = ${accountId} AND user_id = ${userId} AND deleted_at IS NULL
     ), ledger AS (
       SELECT start_date AS date, opening_balance_minor AS delta FROM owned_account
       UNION ALL
@@ -189,7 +190,8 @@ export async function getAccountBalanceSeries(tx: Tx, userId: string, accountId:
 }
 
 export async function listAccounts(tx: Tx, userId: string) {
-  const accounts = await rows<AccountRow>(tx, sql`${accountBalances} WHERE a.user_id = ${userId} ORDER BY a.archived, a.name, a.id`);
+  const accounts = await rows<AccountRow>(tx, sql`${accountBalances}
+    WHERE a.user_id = ${userId} AND a.deleted_at IS NULL ORDER BY a.archived, a.name, a.id`);
   return { accounts: accounts.map(formatAccountBalance) };
 }
 
@@ -201,7 +203,7 @@ export async function listMobileAccounts(tx: Tx, userId: string): Promise<Result
         COUNT(*) OVER (PARTITION BY c.account_id) AS cardCount,
         ROW_NUMBER() OVER (PARTITION BY c.account_id ORDER BY c.id) AS cardPosition
       FROM account_cards c JOIN accounts a ON a.id = c.account_id
-      WHERE a.user_id = ${userId} AND a.archived = FALSE
+      WHERE a.user_id = ${userId} AND a.archived = FALSE AND a.deleted_at IS NULL
     )
     SELECT accountId, cardId, name, appearance, lastFour, network, cardCount
     FROM ranked WHERE cardPosition <= 2 ORDER BY accountId, cardPosition`);
@@ -223,7 +225,7 @@ export async function listCategories(tx: Tx): Promise<Result<'listCategories'>> 
 export async function getCurrencySummary(tx: Tx, userId: string): Promise<Result<'getCurrencySummary'>> {
   const balances = await rows<CurrencyBalance>(tx, sql`
     SELECT a.currency, CAST(SUM(${accountBalanceMinor}) AS CHAR) AS balanceMinor
-    FROM accounts a WHERE a.user_id = ${userId} AND a.archived = FALSE
+    FROM accounts a WHERE a.user_id = ${userId} AND a.archived = FALSE AND a.deleted_at IS NULL
     GROUP BY a.currency ORDER BY CAST(a.currency AS CHAR)`);
   return { balances };
 }
@@ -240,7 +242,7 @@ function findAccountForUpdate(tx: Tx, userId: string, accountId: string) {
     name: string; archived: number; start_date: string; currency: AccountBalance['currency']; version: number;
     maturity_date: string | null;
   }>(tx, sql`SELECT name, archived, start_date, currency, version, maturity_date FROM accounts
-    WHERE id = ${accountId} AND user_id = ${userId} FOR UPDATE`);
+    WHERE id = ${accountId} AND user_id = ${userId} AND deleted_at IS NULL FOR UPDATE`);
 }
 
 async function lockAccount(tx: Tx, userId: string, accountId: string) {
@@ -286,9 +288,9 @@ export function updateAccountStartDate(withAccess: WithCommandAccess, accountId:
         EXISTS (SELECT 1 FROM movements m JOIN transactions t ON t.id = m.transaction_id
           JOIN transaction_versions v ON v.transaction_id = t.id AND v.version = t.current_version
           WHERE m.account_id = ${accountId} AND m.transaction_version = v.version - (v.status = 'void')
-            AND v.financial_date < ${startDate})
+            AND v.financial_date < ${startDate} AND t.deleted_at IS NULL)
         OR EXISTS (SELECT 1 FROM balance_adjustments WHERE account_id = ${accountId} AND financial_date < ${startDate})
-        OR EXISTS (SELECT 1 FROM schedule_rules WHERE account_id = ${accountId} AND first_date < ${startDate})
+        OR EXISTS (SELECT 1 FROM schedule_rules WHERE account_id = ${accountId} AND deleted_at IS NULL AND first_date < ${startDate})
       ) AS found`);
       if (conflict?.found) throw new AccessError(409, 'ACCOUNT_START_DATE_CONFLICT');
     }
@@ -326,7 +328,7 @@ export function setAccountArchived(withAccess: WithCommandAccess, accountId: str
 export async function listBalanceAdjustments(tx: Tx, userId: string, accountId: string,
   beforeVersion?: string,
 ): Promise<Result<'listBalanceAdjustments'>> {
-  const account = await one(tx, sql`SELECT id FROM accounts WHERE id = ${accountId} AND user_id = ${userId}`);
+  const account = await one(tx, sql`SELECT id FROM accounts WHERE id = ${accountId} AND user_id = ${userId} AND deleted_at IS NULL`);
   if (!account) throw new AccessError(404, 'NOT_FOUND');
   const pageSize = 50;
   const history = await rows<BalanceAdjustmentRow>(tx, sql`
@@ -412,11 +414,11 @@ async function updateAccountForMovement(tx: Tx, accountId: string, date: string)
 }
 
 function writeAccountCard<T>(withAccess: WithCommandAccess, accountId: string,
-  write: (tx: Tx, userId: string, now: number) => Promise<T>,
+  write: (tx: Tx, userId: string, now: number, actorId: string) => Promise<T>,
 ) {
-  return retryFinanceWrite(() => withAccess(async (tx, userId, now) => {
+  return retryFinanceWrite(() => withAccess(async (tx, userId, now, actorId) => {
     await lockAccount(tx, userId, accountId);
-    return write(tx, userId, now);
+    return write(tx, userId, now, actorId);
   }));
 }
 
@@ -453,12 +455,12 @@ export function updateAccountCard(withAccess: WithCommandAccess, params: CardPar
   });
 }
 
-export function deleteAccountCard(withAccess: WithCommandAccess, params: CardParams) {
+export function deleteAccountCard(withAccess: WithCommandAccess, params: CardParams, role: ActorRole = 'user') {
   const { accountId, cardId } = params;
-  return writeAccountCard<Result<'deleteAccountCard'>>(withAccess, accountId, async (tx, userId, now) => {
+  return writeAccountCard<Result<'deleteAccountCard'>>(withAccess, accountId, async (tx, userId, now, actorId) => {
     await lockCard(tx, params);
     await tx.execute(sql`DELETE FROM account_cards WHERE id = ${cardId} AND account_id = ${accountId}`);
-    await audit(tx, now, 'user', 'finance.card.deleted', userId, userId, cardId);
+    await audit(tx, now, role, 'finance.card.deleted', actorId, userId, cardId);
     return { ok: true };
   });
 }
@@ -669,7 +671,7 @@ export async function listTransactionVersions(tx: Tx, userId: string, transactio
     FROM transactions t JOIN transaction_versions v ON v.transaction_id = t.id
     LEFT JOIN movements m ON m.transaction_id = v.transaction_id AND m.transaction_version = v.version
     LEFT JOIN accounts a ON a.id = m.account_id
-    WHERE t.id = ${transactionId} AND t.user_id = ${userId} AND v.version <= t.current_version
+    WHERE t.id = ${transactionId} AND t.user_id = ${userId} AND t.deleted_at IS NULL AND v.version <= t.current_version
     ORDER BY v.version, m.account_id`);
   if (!history.length) throw new AccessError(404, 'NOT_FOUND');
   const { type, transactionVersion } = history[0];
@@ -807,4 +809,108 @@ export function changeTransaction(withAccess: WithCommandAccess, recoveryVersion
         return { transactionId, transactionVersion, status: fields.status, accounts };
       });
     }, actorRole);
+}
+
+function selectTransactionsForDeletion(userId: string, filter: SQL) {
+  return sql`transactions t JOIN transaction_versions v ON v.transaction_id = t.id AND v.version = t.current_version
+    AND t.user_id = ${userId} AND t.deleted_at IS NULL AND (${filter})`;
+}
+
+type AffectedAccount = { accountId: string; date: string };
+
+function accountsAffectedByDeletion(tx: Tx, selected: SQL) {
+  return rows<AffectedAccount>(tx, sql`
+    SELECT m.account_id AS accountId, CAST(MIN(v.financial_date) AS CHAR) AS date FROM ${selected}
+    JOIN movements m ON m.transaction_id = t.id AND m.transaction_version = t.current_version
+    WHERE v.status = 'posted' GROUP BY m.account_id`);
+}
+
+async function deleteLedgerTransactions(tx: Tx, selected: SQL, affected: AffectedAccount[],
+  { userId, actorId, now, role, reason }: { userId: string; actorId: string; now: number; role: ActorRole; reason: string | null },
+) {
+  await tx.execute(sql`INSERT INTO transaction_versions
+    (transaction_id, version, status, financial_date, category_id, comment, income_source, created_at, actor_role, reason)
+    SELECT t.id, v.version + 1, 'void', v.financial_date, v.category_id, v.comment, v.income_source, ${now}, ${role}, ${reason}
+    FROM ${selected} WHERE v.status = 'posted'`);
+  const transition = sql`JSON_OBJECT('from', CAST(v.version AS CHAR), 'to', CAST(v.version + 1 AS CHAR)
+    ${reason === null ? sql`` : sql`, 'reason', ${reason}`})`;
+  await tx.execute(sql`INSERT INTO audit_events (actor_role, actor_id, user_id, object_id, event, happened_at, transition)
+    SELECT ${role}, ${actorId}, ${userId}, t.id, 'transaction.voided', ${now}, ${transition}
+    FROM ${selected} WHERE v.status = 'posted'`);
+  await tx.execute(sql`UPDATE ${selected} SET t.current_version = v.version + (v.status = 'posted'), t.deleted_at = ${now}`);
+  for (const account of affected) await updateAccountForMovement(tx, account.accountId, account.date);
+}
+
+export function deleteAccount(withAccess: WithCommandAccess, recoveryVersion: string, accountId: string,
+  input: Body<'deleteAccount'> | Body<'adminDeleteAccount'>, role: ActorRole = 'user',
+): Promise<Result<'deleteAccount'>> {
+  const { idempotencyKey, expectedAccountVersion } = input;
+  const reason = 'reason' in input ? input.reason : null;
+  return runCommand(withAccess, 'account.delete', recoveryVersion, idempotencyKey, [accountId], [String(expectedAccountVersion), reason],
+    async (tx, userId, now, apply, actorId) => {
+      // Keep ownership checks and command retries available after deletion.
+      if (!await one(tx, sql`SELECT id FROM accounts WHERE id = ${accountId} AND user_id = ${userId}`)) {
+        throw new AccessError(404, 'NOT_FOUND');
+      }
+      return apply(async () => {
+        // The owner lock serializes changes to the ledger and the schedule. A void entry belongs to its last posted account.
+        const selected = selectTransactionsForDeletion(userId, sql`EXISTS (
+          SELECT 1 FROM movements m WHERE m.transaction_id = t.id AND m.account_id = ${accountId}
+            AND m.transaction_version = v.version - (v.status = 'void')
+        ) OR EXISTS (
+          SELECT 1 FROM schedule_occurrences o JOIN schedule_rules r ON r.id = o.rule_id
+          WHERE o.transaction_id = t.id AND r.account_id = ${accountId}
+        )`);
+        const affected = (await accountsAffectedByDeletion(tx, selected)).filter((account) => account.accountId !== accountId);
+        const accounts = await lockAccounts(tx, userId, [accountId, ...affected.map((account) => account.accountId)]);
+        const account = accounts.get(accountId)!;
+        if (account.version !== expectedAccountVersion) throw new AccessError(409, 'VERSION_CONFLICT');
+        requireActiveAccounts(affected.map(({ accountId }) => accounts.get(accountId)!));
+
+        await deleteLedgerTransactions(tx, selected, affected, { userId, actorId, now, role, reason });
+        await tx.execute(sql`DELETE f FROM schedule_date_failures f JOIN schedule_rules r ON r.id = f.rule_id
+          WHERE r.account_id = ${accountId}`);
+        await tx.execute(sql`UPDATE schedule_rules SET deleted_at = ${now} WHERE account_id = ${accountId} AND deleted_at IS NULL`);
+        await tx.execute(sql`DELETE FROM account_cards WHERE account_id = ${accountId}`);
+        await tx.execute(sql`UPDATE accounts SET deleted_at = ${now}, version = version + 1 WHERE id = ${accountId}`);
+        await audit(tx, now, role, 'finance.account.deleted', actorId, userId, accountId,
+          { from: String(account.version), to: 'deleted', ...(reason !== null && { reason }) });
+        return { accountId, status: 'deleted' };
+      });
+    }, role);
+}
+
+export function deleteScheduleRule(withAccess: WithCommandAccess, recoveryVersion: string, ruleId: string,
+  input: Body<'deleteScheduleRule'> | Body<'adminDeleteScheduleRule'>, role: ActorRole = 'user',
+): Promise<Result<'deleteScheduleRule'>> {
+  const { idempotencyKey, expectedRuleVersion } = input;
+  const reason = 'reason' in input ? input.reason : null;
+  return runCommand(withAccess, 'schedule.delete', recoveryVersion, idempotencyKey, [ruleId], [String(expectedRuleVersion), reason],
+    async (tx, userId, now, apply, actorId) => {
+      const accountId = await requireScheduleRuleAccount(tx, userId, ruleId, true);
+      return apply(async () => {
+        // The owner lock serializes worker posts and transaction revisions. Use the current movements, including moves to other accounts.
+        const selected = selectTransactionsForDeletion(userId, sql`EXISTS (
+          SELECT 1 FROM schedule_occurrences o WHERE o.transaction_id = t.id AND o.rule_id = ${ruleId}
+        )`);
+        const affected = await accountsAffectedByDeletion(tx, selected);
+        const accounts = await lockAccounts(tx, userId, [accountId, ...affected.map((movement) => movement.accountId)]);
+        requireActiveAccounts(accounts.values());
+
+        const rule = await one<{ ruleVersion: number; recoveryHeld: number }>(tx, sql`
+          SELECT r.recovery_held AS recoveryHeld,
+            (SELECT MAX(rv.version) FROM schedule_rule_versions rv WHERE rv.rule_id = r.id) AS ruleVersion
+          FROM schedule_rules r WHERE r.id = ${ruleId} AND r.deleted_at IS NULL FOR UPDATE`);
+        if (!rule) throw new AccessError(404, 'NOT_FOUND');
+        if (rule.ruleVersion !== expectedRuleVersion) throw new AccessError(409, 'VERSION_CONFLICT');
+        if (rule.recoveryHeld) throw new AccessError(409, 'SCHEDULE_RULE_STATE_CONFLICT');
+
+        await deleteLedgerTransactions(tx, selected, affected, { userId, actorId, now, role, reason });
+        await tx.execute(sql`UPDATE schedule_rules SET deleted_at = ${now} WHERE id = ${ruleId}`);
+        await tx.execute(sql`DELETE FROM schedule_date_failures WHERE rule_id = ${ruleId}`);
+        await audit(tx, now, role, 'schedule.rule.deleted', actorId, userId, ruleId,
+          { from: String(rule.ruleVersion), to: 'deleted', ...(reason !== null && { reason }) });
+        return { ruleId, status: 'deleted' };
+      });
+    }, role);
 }

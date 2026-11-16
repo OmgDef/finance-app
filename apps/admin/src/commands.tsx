@@ -35,7 +35,8 @@ function readReferences(actorId: string): Reference[] {
     const base = { actorId, userId: value.userId, idempotencyKey: value.idempotencyKey };
     if (value.command === 'account.create') {
       entries.push({ ...base, command: value.command });
-    } else if (value.command === 'account.reconcile' && 'accountId' in value && id(value.accountId)) {
+    } else if ((value.command === 'account.reconcile' || value.command === 'account.delete') &&
+      'accountId' in value && id(value.accountId)) {
       entries.push({ ...base, command: value.command, accountId: value.accountId });
     } else if ((value.command === 'transaction.revise' || value.command === 'transaction.void') &&
       'transactionId' in value && id(value.transactionId)) {
@@ -46,6 +47,8 @@ function readReferences(actorId: string): Reference[] {
     } else if (value.command === 'schedule.replace' && 'ruleId' in value && id(value.ruleId) &&
       'accountId' in value && id(value.accountId)) {
       entries.push({ ...base, command: value.command, ruleId: value.ruleId, accountId: value.accountId });
+    } else if (value.command === 'schedule.delete' && 'ruleId' in value && id(value.ruleId)) {
+      entries.push({ ...base, command: value.command, ruleId: value.ruleId });
     } else throw new ApiError('STORAGE');
   }
   return entries;
@@ -53,12 +56,18 @@ function readReferences(actorId: string): Reference[] {
 
 function resultMatches(reference: Reference, result: CommandResult) {
   if (reference.command === 'account.create') return 'startDate' in result;
+  if (reference.command === 'account.delete') {
+    return 'accountId' in result && 'status' in result && result.status === 'deleted' && result.accountId === reference.accountId;
+  }
   if (reference.command === 'account.reconcile') return 'adjustmentId' in result && result.accountId === reference.accountId;
   if (reference.command === 'schedule.skip') {
     return 'occurrenceId' in result && result.ruleId === reference.ruleId && result.date === reference.date;
   }
   if (reference.command === 'schedule.replace') {
     return 'replacementRule' in result && result.ruleId === reference.ruleId && result.accountId === reference.accountId;
+  }
+  if (reference.command === 'schedule.delete') {
+    return 'ruleId' in result && 'status' in result && result.status === 'deleted' && result.ruleId === reference.ruleId;
   }
   return 'accounts' in result && result.transactionId === reference.transactionId &&
     result.status === (reference.command === 'transaction.void' ? 'void' : 'posted');
@@ -238,7 +247,7 @@ export function CommandRecovery({ commands, lang, userId }: { commands: AdminCom
     </>}
     {error && <p role="status">{t.errors[error] ?? t.errors.NETWORK}</p>}
     {outcome && <div role="status">
-      <p>{t.commandLabels[outcome.reference.command]} · {t.committed}</p>
+      <p>{outcome.reference.command === 'schedule.delete' ? s.deleted : `${t.commandLabels[outcome.reference.command]} · ${t.committed}`}</p>
       {result && 'startDate' in result && <p>{result.name} · {dateLabel(result.startDate, lang)} · {formatMoney(result.balanceMinor, result.currency, lang)}</p>}
       {result && 'adjustmentId' in result && <p>{dateLabel(result.date, lang)} · {t.actual} {formatMoney(result.actualBalanceMinor, result.currency, lang)} ·
         {' '}{t.delta} {formatMoney(result.deltaMinor, result.currency, lang, true)}</p>}

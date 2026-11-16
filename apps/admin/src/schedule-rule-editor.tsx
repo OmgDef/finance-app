@@ -4,7 +4,7 @@ import type { Body, Language, Result } from '@teta/contracts';
 import { api, errorCode } from './api';
 import type { AdminCommands } from './commands';
 import { financeWords } from './finance-copy';
-import { AccountPicker, dateLabel, Failure, lastFinancialDate, LabeledInput, useAmount, useQuery } from './finance-ui';
+import { AccountPicker, ConfirmDeletion, dateLabel, Failure, lastFinancialDate, LabeledInput, useAmount, useQuery } from './finance-ui';
 import type { Account, Category, Session } from './finance-ui';
 import { scheduleWords } from './schedule-copy';
 
@@ -232,6 +232,30 @@ export function RuleEditor({ action, rule, account, categories, today, onCancel,
     </form> : <RuleForm account={account} rule={rule} mode={action} today={today} categories={categories} lang={lang}
       disabled={disabled || busy || uncertain} onSave={(terms, text) => void save(terms, text)} onCancel={onCancel} />}
   </>;
+}
+
+export function DeleteRuleEditor({ rule, commands, onCancel, onRefresh, userId, session, lang, disabled }: Omit<Context, 'onExpired'> & {
+  rule: Rule; commands: AdminCommands; onCancel: () => void; onRefresh: () => void;
+}) {
+  const t = scheduleWords[lang];
+  const [error, setError] = useState('');
+
+  async function remove(reason: string) {
+    setError('');
+    const params = { userId, ruleId: rule.ruleId };
+    try {
+      await commands.submit({ ...params, command: 'schedule.delete' }, (idempotencyKey) =>
+        api('adminDeleteScheduleRule', { params, csrf: session.csrf,
+          body: { idempotencyKey, expectedRuleVersion: rule.ruleVersion, reason } }));
+    } catch (failure) {
+      const code = errorCode(failure);
+      setError(code);
+      if (lifecycleConflict.includes(code) || code === 'NOT_FOUND') onRefresh();
+    }
+  }
+
+  return <ConfirmDeletion label={t.delete} message={t.confirmDelete} lang={lang} disabled={disabled}
+    feedback={error && <Failure code={error} lang={lang} />} onConfirm={(reason) => void remove(reason)} onCancel={onCancel} />;
 }
 
 export function ReplacementEditor({ rule, accounts, today, categories, commands, onCancel, onRefresh, ...context }: Context & {

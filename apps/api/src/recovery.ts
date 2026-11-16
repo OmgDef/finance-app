@@ -55,7 +55,7 @@ export function prepareRecovery(db: Db, input: Preparation, now = Date.now()) {
     await tx.execute(sql`INSERT INTO audit_events (actor_role, user_id, object_id, event, happened_at, transition)
       SELECT 'operator', id, id, 'account.recovery_pending', ${now}, JSON_OBJECT('from', status, 'to', 'review') FROM users`);
     await tx.execute(sql`UPDATE users SET status = 'review'`);
-    await tx.execute(sql`UPDATE schedule_rules SET recovery_held = TRUE`);
+    await tx.execute(sql`UPDATE schedule_rules SET recovery_held = TRUE WHERE deleted_at IS NULL`);
     await tx.execute(sql`DELETE FROM schedule_worker_state WHERE id = 1`);
     await tx.execute(sql`INSERT INTO recovery_state (id, version, snapshot_at, incident_at, prepared_at)
       VALUES (1, ${version}, ${snapshotAt}, ${incidentAt}, ${now})
@@ -72,11 +72,12 @@ export function prepareRecovery(db: Db, input: Preparation, now = Date.now()) {
 async function lockRecoveryRule(tx: Tx, ruleId: string) {
   const target = await one<{ userId: string; accountId: string }>(tx, sql`
     SELECT a.user_id AS userId, a.id AS accountId FROM schedule_rules r JOIN accounts a ON a.id = r.account_id
-    WHERE r.id = ${ruleId}`);
+    WHERE r.id = ${ruleId} AND r.deleted_at IS NULL`);
   if (!target) throw new RecoveryError('The rule is unavailable.');
   await tx.execute(sql`SELECT id FROM users WHERE id = ${target.userId} FOR UPDATE`);
   await tx.execute(sql`SELECT id FROM accounts WHERE id = ${target.accountId} FOR UPDATE`);
-  const rule = await one<{ held: number }>(tx, sql`SELECT recovery_held AS held FROM schedule_rules WHERE id = ${ruleId} FOR UPDATE`);
+  const rule = await one<{ held: number }>(tx, sql`
+    SELECT recovery_held AS held FROM schedule_rules WHERE id = ${ruleId} AND deleted_at IS NULL FOR UPDATE`);
   if (!rule?.held) throw new RecoveryError('The rule is not held for recovery.');
   return target;
 }
@@ -94,11 +95,12 @@ export function applyRecoveryReview(db: Db, version: string, input: ReviewAction
     if (!state || String(state.version) !== version) throw new RecoveryError('The active recovery version does not match.');
     if (input.action === 'flag-account') {
       const { accountId } = input;
-      const account = await one<{ userId: string }>(tx, sql`SELECT user_id AS userId FROM accounts WHERE id = ${accountId}`);
+      const account = await one<{ userId: string }>(tx, sql`
+        SELECT user_id AS userId FROM accounts WHERE id = ${accountId} AND deleted_at IS NULL`);
       if (!account) throw new RecoveryError('The account is unavailable.');
       await tx.execute(sql`SELECT id FROM users WHERE id = ${account.userId} FOR UPDATE`);
       const current = await one<{ marked: number }>(tx, sql`
-        SELECT needs_reconciliation AS marked FROM accounts WHERE id = ${accountId} FOR UPDATE`);
+        SELECT needs_reconciliation AS marked FROM accounts WHERE id = ${accountId} AND deleted_at IS NULL FOR UPDATE`);
       if (!current) throw new RecoveryError('The account is unavailable.');
       if (current.marked) return;
       await tx.execute(sql`UPDATE accounts SET needs_reconciliation = TRUE, version = version + 1 WHERE id = ${accountId}`);

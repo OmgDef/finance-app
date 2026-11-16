@@ -142,6 +142,8 @@ const adjustmentQuery = T.Object({ beforeVersion: T.Optional(adjustmentCursor) }
 const adjustmentHistory = T.Object({ adjustments: T.Array(balanceAdjustment), next: T.Union([adjustmentCursor, T.Null()]) });
 const accountNotFound = { 404: 'NOT_FOUND when the account is absent or belongs to another user.' };
 const accountArchiveState = T.Object({ accountId: id, accountVersion: ledgerVersion, archived: T.Boolean(), balanceMinor });
+const accountDeleteFields = { idempotencyKey, expectedAccountVersion: ledgerVersion };
+const accountDeleteResult = T.Object({ accountId: id, status: T.Literal('deleted') });
 const restoreFailures = {
   ...accountNotFound,
   503: 'TEMPORARY_FAILURE after exhausting transaction retries for a database lock error.',
@@ -164,6 +166,11 @@ const archiveFailures = {
 };
 const archiveDescription = 'Archives a zero-balance account once all due schedule dates have a final outcome and its rules have no remaining future dates. Account history stays readable. Repeating the command while it is archived returns its current state.';
 const restoreDescription = 'Restores an archived account with its existing history. Repeating the command while it is active returns its current state.';
+const accountDeleteDescription = 'Removes an active or archived account, its cards, and its schedule rules. Removes the account’s current transactions and transactions created by its rules from the ledger. Transfers are removed from both accounts. Prior ledger versions are retained for audit. An identical retry returns the original result.';
+const accountDeleteFailures = {
+  ...restoreFailures,
+  409: 'VERSION_CONFLICT for a stale account version or ACCOUNT_UNAVAILABLE for another archived account with a linked posted transaction. ' + commandWriteConflicts,
+};
 const reconciliationFailures = {
   ...accountNotFound,
   400: 'INVALID_REQUEST for duplicate selected dates or when the factual balance or computed delta is outside the signed BIGINT range.',
@@ -172,6 +179,7 @@ const reconciliationFailures = {
 };
 const reconciliationDescription = 'Saves the factual balance and its difference from the current balance, including zero. Selected dates already included in that balance are skipped in the same transaction. An identical retry returns the original adjustment.';
 const cardParams = T.Object({ accountId: id, cardId: id });
+const adminCardParams = T.Object({ userId: id, ...cardParams.properties });
 const cardNetwork = T.Union([...cardNetworks.map((network) => T.Literal(network)), T.Null()]);
 const cardFields = {
   name: accountName,
@@ -182,6 +190,7 @@ const cardFields = {
 const cardInput = T.Object({ ...cardFields, lastFour: T.Optional(cardFields.lastFour), network: T.Optional(cardNetwork) },
   { additionalProperties: false });
 const accountCard = T.Object({ cardId: id, accountId: id, ...cardFields, currency, balanceMinor });
+const accountCardList = T.Object({ cards: T.Array(accountCard) });
 const accountCardPreview = T.Object({
   accountId: id,
   count: T.Integer({ minimum: 1 }),
@@ -411,6 +420,8 @@ const scheduleTransition = {
   transitionDate: financialDate,
   transitionAt: T.Integer({ description: 'Saved UTC boundary in Unix milliseconds.' }),
 };
+const deleteRuleFields = { ...ruleVersionFields, idempotencyKey };
+const scheduleDeleteResult = T.Object({ ruleId: id, status: T.Literal('deleted') });
 const linkedScheduleRule = T.Object({ ruleId: id, ...scheduleTransition });
 const scheduleRule = T.Object({
   ...ruleFields, ruleId: id, currency, comment: ruleComment, ...sourceReadFields, endDate: ruleEndDate, state: ruleState,
@@ -459,6 +470,12 @@ const scheduleRuleWriteFailures = {
   503: 'TEMPORARY_FAILURE after exhausting transaction retries for a database lock error.',
 };
 const scheduleRuleReadFailures = { 404: scheduleRuleWriteFailures[404] };
+const scheduleDeleteDescription = 'Immediately removes the rule and its dates from the schedule. All transactions created by the rule are removed from account history and balances, with their versions retained for audit. Replaying the same key and request returns the original result.';
+const scheduleDeleteFailures = {
+  ...scheduleRuleReadFailures,
+  409: 'VERSION_CONFLICT for a stale rule version, ACCOUNT_UNAVAILABLE for an archived affected account, or SCHEDULE_RULE_STATE_CONFLICT for a rule held for recovery. ' + commandWriteConflicts,
+  503: scheduleRuleWriteFailures[503],
+};
 const replacementPreviewDescription = 'Select the destination account to obtain the transition boundary, minimum start date, and all reconciliation skips to consider. A linked rule becomes eligible at its saved UTC boundary.';
 const replacementDescription = 'Use the source rule version and token returned by the preview for the destination account. Supply one decision per previewed source date and use each target date at most once. A changed boundary or source list requires a new preview. An identical retry returns the original result.';
 const replacementPreviewFailures = {
@@ -483,6 +500,9 @@ const commandKeyFields = { idempotencyKey, userId: id };
 const accountReconcileKey = T.Object({
   ...commandKeyFields, command: T.Literal('account.reconcile'), accountId: id,
 }, { additionalProperties: false });
+const accountDeleteKey = T.Object({
+  ...commandKeyFields, command: T.Literal('account.delete'), accountId: id,
+}, { additionalProperties: false });
 const transactionChangeKey = T.Object({
   ...commandKeyFields, command: T.Union([T.Literal('transaction.revise'), T.Literal('transaction.void')]), transactionId: id,
 }, { additionalProperties: false });
@@ -492,8 +512,13 @@ const scheduleSkipKey = T.Object({
 const scheduleReplaceKey = T.Object({
   ...commandKeyFields, command: T.Literal('schedule.replace'), ruleId: id, accountId: id,
 }, { additionalProperties: false });
+const scheduleDeleteKey = T.Object({
+  ...commandKeyFields, command: T.Literal('schedule.delete'), ruleId: id,
+}, { additionalProperties: false });
 const accountCreateKey = T.Object({ ...commandKeyFields, command: T.Literal('account.create') }, { additionalProperties: false });
-const adminCommandKey = T.Union([accountCreateKey, accountReconcileKey, transactionChangeKey, scheduleSkipKey, scheduleReplaceKey]);
+const adminCommandKey = T.Union([
+  accountCreateKey, accountReconcileKey, accountDeleteKey, transactionChangeKey, scheduleSkipKey, scheduleReplaceKey, scheduleDeleteKey,
+]);
 const mobileCommandKey = T.Union([
   accountCreateKey,
   T.Object({
@@ -502,14 +527,17 @@ const mobileCommandKey = T.Union([
   T.Object({
     ...commandKeyFields, command: T.Literal('transfer.record'), fromAccountId: id, toAccountId: id,
   }, { additionalProperties: false }),
-  accountReconcileKey, transactionChangeKey, scheduleSkipKey, scheduleReplaceKey,
+  accountReconcileKey, accountDeleteKey, transactionChangeKey, scheduleSkipKey, scheduleReplaceKey, scheduleDeleteKey,
 ]);
 const committedCommand = T.Object({
   state: T.Literal('committed'),
-  result: T.Union([accountBalance, transactionRecord, balanceAdjustment, transactionChange, scheduleSkipResult, replacementResult]),
+  result: T.Union([
+    accountBalance, transactionRecord, balanceAdjustment, transactionChange, scheduleSkipResult, replacementResult,
+    scheduleDeleteResult, accountDeleteResult,
+  ]),
 });
 const commandStatus = T.Union([committedCommand, T.Object({ state: T.Literal('unknown') })]);
-const commandStatusDescription = 'Send the key, command name, data owner, and target from the original request. A schedule skip uses the rule and date. A schedule replacement uses the superseded rule and destination account. Returns the original committed result, or unknown if no outcome has committed for the current recovery version.';
+const commandStatusDescription = 'Send the key, command name, data owner, and target from the original request. An account deletion uses the account ID. A schedule skip uses the rule and date. A schedule replacement uses the superseded rule and destination account. A schedule deletion uses the rule ID. Returns the original committed result, or unknown if no outcome has committed for the current recovery version.';
 const closeCommandDescription = 'Atomically closes a key with no result. COMMAND_CLOSED confirms the key cannot record changes. If the command committed first, returns its original result. After a timeout, use the same key to check the outcome.';
 const commandLookupFailures = {
   404: 'NOT_FOUND when the requested owner or targets are unavailable to the caller or differ from the recorded command scope.',
@@ -681,6 +709,11 @@ export const routes = {
     ...route(endpoints.restoreAccount, 'mobile', 'Restore an owned account', empty, accountArchiveState),
     params: accountParams, optionalBody: true, description: restoreDescription, failures: restoreFailures,
   },
+  deleteAccount: {
+    ...route(endpoints.deleteAccount, 'mobile', 'Delete an owned account and its ledger entries',
+      T.Object(accountDeleteFields, { additionalProperties: false }), accountDeleteResult),
+    params: accountParams, description: accountDeleteDescription, failures: accountDeleteFailures,
+  },
   listBalanceAdjustments: {
     ...route(endpoints.listBalanceAdjustments, 'mobile', 'Read balance reconciliation history', empty, adjustmentHistory),
     params: accountParams, query: adjustmentQuery, failures: accountNotFound,
@@ -695,8 +728,7 @@ export const routes = {
     failures: { ...accountNotFound, ...reconciliationPreviewFailures },
   },
   listAccountCards: {
-    ...route(endpoints.listAccountCards, 'mobile', 'Read cards linked to an owned account', empty,
-      T.Object({ cards: T.Array(accountCard) })),
+    ...route(endpoints.listAccountCards, 'mobile', 'Read cards linked to an owned account', empty, accountCardList),
     params: accountParams,
     description: 'Every card reports the current balance and currency of its linked account.',
     failures: { 404: 'NOT_FOUND when the account is absent or belongs to another user.' },
@@ -768,6 +800,11 @@ export const routes = {
     params: scheduleRuleParams,
     description: 'Uses the latest accepted version as a concurrency guard. The change becomes effective at the start of the next local day, even if the profile time zone changes later. Ending a rule is final.',
     failures: scheduleRuleWriteFailures,
+  },
+  deleteScheduleRule: {
+    ...route(endpoints.deleteScheduleRule, 'mobile', 'Delete a schedule rule and the transactions it created',
+      T.Object(deleteRuleFields, { additionalProperties: false }), scheduleDeleteResult),
+    params: scheduleRuleParams, description: scheduleDeleteDescription, failures: scheduleDeleteFailures,
   },
   previewScheduleRuleReplacement: {
     ...route(endpoints.previewScheduleRuleReplacement, 'mobile', 'Preview the replacement of a schedule rule', empty, replacementPreview),
@@ -924,6 +961,19 @@ export const routes = {
     ...route(endpoints.adminRestoreAccount, 'admin', 'Restore an account for the selected user', empty, accountArchiveState),
     params: adminAccountParams, optionalBody: true, description: restoreDescription, failures: restoreFailures,
   },
+  adminDeleteAccount: {
+    ...route(endpoints.adminDeleteAccount, 'admin', 'Delete an account for the selected user with an audit reason',
+      T.Object({ ...accountDeleteFields, reason: adminReason }, { additionalProperties: false }), accountDeleteResult),
+    params: adminAccountParams, description: accountDeleteDescription, failures: accountDeleteFailures,
+  },
+  adminListAccountCards: {
+    ...route(endpoints.adminListAccountCards, 'admin', 'Read cards linked to an account for the selected user', empty, accountCardList),
+    params: adminAccountParams, failures: accountNotFound,
+  },
+  adminDeleteAccountCard: {
+    ...route(endpoints.adminDeleteAccountCard, 'admin', 'Delete a card for the selected user', empty, ok),
+    params: adminCardParams, failures: cardWriteFailures,
+  },
   adminListBalanceAdjustments: {
     ...route(endpoints.adminListBalanceAdjustments, 'admin', 'Read reconciliation history for the selected user', empty, adjustmentHistory),
     params: adminAccountParams, query: adjustmentQuery, failures: accountNotFound,
@@ -983,6 +1033,11 @@ export const routes = {
   adminChangeScheduleRule: {
     ...route(endpoints.adminChangeScheduleRule, 'admin', 'Edit, pause, resume, or end a rule with an audit reason', adminRuleChange, scheduleRule),
     params: adminScheduleRuleParams, failures: scheduleRuleWriteFailures,
+  },
+  adminDeleteScheduleRule: {
+    ...route(endpoints.adminDeleteScheduleRule, 'admin', 'Delete a rule and its transactions with an audit reason',
+      T.Object({ ...deleteRuleFields, reason: adminReason }, { additionalProperties: false }), scheduleDeleteResult),
+    params: adminScheduleRuleParams, description: scheduleDeleteDescription, failures: scheduleDeleteFailures,
   },
   adminPreviewScheduleRuleReplacement: {
     ...route(endpoints.adminPreviewScheduleRuleReplacement, 'admin', 'Preview a rule replacement for the selected owner', empty, replacementPreview),

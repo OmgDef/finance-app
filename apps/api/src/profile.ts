@@ -32,7 +32,7 @@ export async function changeProfileTimeZone(tx: Tx, userId: string, now: number,
   const occupied = await one<{ occupied: number }>(tx, sql`
     SELECT (EXISTS (SELECT 1 FROM user_time_zone_versions WHERE user_id = ${userId} AND effective_at >= ${now})
       OR EXISTS (SELECT 1 FROM schedule_rules r JOIN accounts a ON a.id = r.account_id
-        WHERE a.user_id = ${userId} AND r.created_at >= ${now})) AS occupied`);
+        WHERE a.user_id = ${userId} AND r.deleted_at IS NULL AND r.created_at >= ${now})) AS occupied`);
   if (occupied?.occupied) throw new AccessError(409, 'TIME_ZONE_CONFLICT');
 
   await tx.execute(sql`INSERT INTO user_time_zone_versions (user_id, effective_at, time_zone)

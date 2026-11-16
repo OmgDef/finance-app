@@ -1,8 +1,9 @@
 import type { Language } from '@teta/contracts';
+import { appBrand } from './app-variant';
 
 export const copy = {
   en: {
-    appName: 'TetaFinance',
+    appName: appBrand.name.en,
     appVersion: 'Version', appBuild: 'Build',
     activate: 'Activate this phone', email: 'Email', code: 'Activation code', pin: 'Four-digit PIN',
     repeat: 'Confirm PIN', profile: 'Profile', signOut: 'Sign out', support: 'Support', retry: 'Try again',
@@ -42,7 +43,7 @@ export const copy = {
     generic: 'The request could not be completed.',
   },
   ru: {
-    appName: 'TэтаФинанс',
+    appName: appBrand.name.ru,
     appVersion: 'Версия', appBuild: 'Сборка',
     activate: 'Активировать телефон', email: 'Email', code: 'Код активации',
     pin: 'Четырёхзначный PIN', repeat: 'Повторите PIN', profile: 'Профиль', signOut: 'Выйти',

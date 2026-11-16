@@ -16,8 +16,9 @@ import type { Db } from './db.ts';
 import { AccessError, sessionExpired } from './errors.ts';
 import { exchangeRates } from './exchange-rates.ts';
 import {
-  changeTransaction, createAccount, createAccountCard, deleteAccountCard, getAccountBalance, getAccountBalanceSeries, getCurrencySummary,
-  listAccountCards, listAccounts, listBalanceAdjustments, listCategories, listMobileAccounts, listTransactionVersions, previewBalanceAdjustment,
+  changeTransaction, createAccount, createAccountCard, deleteAccount, deleteAccountCard, deleteScheduleRule, getAccountBalance,
+  getAccountBalanceSeries, getCurrencySummary, listAccountCards, listAccounts, listBalanceAdjustments, listCategories,
+  listMobileAccounts, listTransactionVersions, previewBalanceAdjustment,
   previewTransactionChange, readAccountStatement, reconcileAccountBalance, recordTransaction, renameAccount, setAccountArchived, updateAccountCard,
   updateAccountStartDate,
 } from './finance.ts';
@@ -194,6 +195,8 @@ export function buildApp(config: Config, db: Db, clock = Date.now, logger = fals
   });
   add('archiveAccount', async (request) => setAccountArchived(mobileCommandAccess(request), request.params.accountId, true));
   add('restoreAccount', async (request) => setAccountArchived(mobileCommandAccess(request), request.params.accountId, false));
+  add('deleteAccount', async (request) =>
+    deleteAccount(mobileCommandAccess(request), config.recoveryVersion, request.params.accountId, request.body));
   add('listBalanceAdjustments', async (request) => mobile.withSession(bearer(request), (tx, user) =>
     listBalanceAdjustments(tx, user.id, request.params.accountId, (request.query as { beforeVersion?: string }).beforeVersion)));
   add('reconcileAccountBalance', async (request) =>
@@ -223,6 +226,8 @@ export function buildApp(config: Config, db: Db, clock = Date.now, logger = fals
     getScheduleRule(tx, user.id, request.params.ruleId, now)));
   add('changeScheduleRule', async (request) =>
     changeScheduleRule(mobileCommandAccess(request), request.params.ruleId, request.body));
+  add('deleteScheduleRule', async (request) =>
+    deleteScheduleRule(mobileCommandAccess(request), config.recoveryVersion, request.params.ruleId, request.body));
   add('previewScheduleRuleReplacement', async (request) => mobileCommandAccess(request)((tx, userId, now) =>
     previewScheduleRuleReplacement(tx, userId, now, request.params.ruleId, (request.query as { accountId: string }).accountId,
       config.accessKey)));
@@ -280,6 +285,12 @@ export function buildApp(config: Config, db: Db, clock = Date.now, logger = fals
     setAccountArchived(adminCommandAccess(request, request.params.userId), request.params.accountId, true, 'admin'));
   add('adminRestoreAccount', async (request) =>
     setAccountArchived(adminCommandAccess(request, request.params.userId), request.params.accountId, false, 'admin'));
+  add('adminDeleteAccount', async (request) =>
+    deleteAccount(adminCommandAccess(request, request.params.userId), config.recoveryVersion, request.params.accountId, request.body, 'admin'));
+  add('adminListAccountCards', async (request) => adminSession(request, (tx) =>
+    listAccountCards(tx, request.params.userId, request.params.accountId)));
+  add('adminDeleteAccountCard', async (request) =>
+    deleteAccountCard(adminCommandAccess(request, request.params.userId), request.params, 'admin'));
   add('adminListBalanceAdjustments', async (request) => adminSession(request, (tx) =>
     listBalanceAdjustments(tx, request.params.userId, request.params.accountId,
       (request.query as { beforeVersion?: string }).beforeVersion)));
@@ -309,6 +320,8 @@ export function buildApp(config: Config, db: Db, clock = Date.now, logger = fals
     getScheduleRule(tx, userId, request.params.ruleId, now)));
   add('adminChangeScheduleRule', async (request) =>
     changeScheduleRule(adminCommandAccess(request, request.params.userId), request.params.ruleId, request.body, 'admin'));
+  add('adminDeleteScheduleRule', async (request) =>
+    deleteScheduleRule(adminCommandAccess(request, request.params.userId), config.recoveryVersion, request.params.ruleId, request.body, 'admin'));
   add('adminPreviewScheduleRuleReplacement', async (request) =>
     adminCommandAccess(request, request.params.userId)((tx, userId, now) =>
       previewScheduleRuleReplacement(tx, userId, now, request.params.ruleId, (request.query as { accountId: string }).accountId,

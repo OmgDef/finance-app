@@ -11,13 +11,15 @@ type WithoutKey<T> = T extends { idempotencyKey: string } ? Omit<T, 'idempotency
 export type TransactionFields = WithoutKey<Body<'recordTransaction'>>;
 type SingleAccountFields = Omit<Extract<TransactionFields, { accountId: string }>, 'type'>;
 export type FinanceDraft = { kind: 'account.create'; body: CreateAccount }
+  | { kind: 'account.delete'; accountId: string; body: WithoutKey<Body<'deleteAccount'>> }
   | { kind: 'account.reconcile'; accountId: string; body: WithoutKey<Body<'reconcileAccountBalance'>> }
   | { kind: 'expense.record' | 'income.record'; body: SingleAccountFields }
   | { kind: 'transfer.record'; body: Extract<TransactionFields, { type: 'transfer' }> }
   | { kind: 'transaction.revise'; transactionId: string; body: WithoutKey<Body<'reviseTransaction'>> }
   | { kind: 'transaction.void'; transactionId: string; body: WithoutKey<Body<'voidTransaction'>> }
   | { kind: 'schedule.skip'; ruleId: string; date: string; body: WithoutKey<Body<'skipScheduleOccurrence'>> }
-  | { kind: 'schedule.replace'; ruleId: string; body: WithoutKey<Body<'replaceScheduleRule'>> };
+  | { kind: 'schedule.replace'; ruleId: string; body: WithoutKey<Body<'replaceScheduleRule'>> }
+  | { kind: 'schedule.delete'; ruleId: string; body: WithoutKey<Body<'deleteScheduleRule'>> };
 type CommandKey = Extract<Body<'commandStatus'>, { command: FinanceDraft['kind'] }>;
 type CommandReference = CommandKey & { actorId: string };
 export type FinanceCommand = CommandReference['command'];
@@ -41,7 +43,8 @@ function commandReference(raw: string, actorId: string): CommandReference {
       /^[1-9][0-9]{0,9}\.[a-f0-9]{64}$/.test(value.idempotencyKey) && 'command' in value) {
     const base = { actorId, userId: actorId, idempotencyKey: value.idempotencyKey };
     if (value.command === 'account.create') return { ...base, command: value.command };
-    if ((value.command === 'expense.record' || value.command === 'income.record' || value.command === 'account.reconcile') &&
+    if ((value.command === 'expense.record' || value.command === 'income.record' || value.command === 'account.reconcile' ||
+        value.command === 'account.delete') &&
         'accountId' in value && isId(value.accountId)) {
       return { ...base, command: value.command, accountId: value.accountId };
     }
@@ -54,6 +57,7 @@ function commandReference(raw: string, actorId: string): CommandReference {
       return { ...base, command: value.command, transactionId: value.transactionId };
     }
     if ('ruleId' in value && isId(value.ruleId)) {
+      if (value.command === 'schedule.delete') return { ...base, command: value.command, ruleId: value.ruleId };
       if (value.command === 'schedule.skip' && 'date' in value && typeof value.date === 'string' &&
           financialDate(value.date, 'en') === value.date) {
         return { ...base, command: value.command, ruleId: value.ruleId, date: value.date };
@@ -74,6 +78,7 @@ function newReference(data: FinanceDraft, actorId: string, idempotencyKey: strin
   const base = { actorId, userId: actorId, idempotencyKey };
   switch (data.kind) {
     case 'account.create': return { ...base, command: data.kind };
+    case 'account.delete': return { ...base, command: data.kind, accountId: data.accountId };
     case 'account.reconcile': return { ...base, command: data.kind, accountId: data.accountId };
     case 'expense.record':
     case 'income.record': return { ...base, command: data.kind, accountId: data.body.accountId };
@@ -85,6 +90,7 @@ function newReference(data: FinanceDraft, actorId: string, idempotencyKey: strin
     case 'transaction.void': return { ...base, command: data.kind, transactionId: data.transactionId };
     case 'schedule.skip': return { ...base, command: data.kind, ruleId: data.ruleId, date: data.date };
     case 'schedule.replace': return { ...base, command: data.kind, ruleId: data.ruleId, accountId: data.body.accountId };
+    case 'schedule.delete': return { ...base, command: data.kind, ruleId: data.ruleId };
   }
 }
 
@@ -92,6 +98,8 @@ function writeCommand(token: string, data: FinanceDraft, idempotencyKey: string)
   switch (data.kind) {
     case 'account.create':
       return request('createAccount', { token, body: { ...data.body, idempotencyKey } });
+    case 'account.delete':
+      return request('deleteAccount', { token, params: { accountId: data.accountId }, body: { ...data.body, idempotencyKey } });
     case 'account.reconcile':
       return request('reconcileAccountBalance', { token, params: { accountId: data.accountId },
         body: { ...data.body, idempotencyKey } });
@@ -112,6 +120,9 @@ function writeCommand(token: string, data: FinanceDraft, idempotencyKey: string)
         body: { ...data.body, idempotencyKey } });
     case 'schedule.replace':
       return request('replaceScheduleRule', { token, params: { ruleId: data.ruleId },
+        body: { ...data.body, idempotencyKey } });
+    case 'schedule.delete':
+      return request('deleteScheduleRule', { token, params: { ruleId: data.ruleId },
         body: { ...data.body, idempotencyKey } });
   }
 }

@@ -36,12 +36,13 @@ const accountErrors: Record<string, FinanceCopyKey> = {
 const ambiguousErrors = ['NETWORK', 'INTERNAL_ERROR', 'TEMPORARY_FAILURE'];
 
 export function AccountManagement({ account, access, lang, disabled, editor, notice, onAccountChanged, onReconcile,
-  onEdit, onBusy, onFinish }: {
+  onEdit, onBusy, onFinish, onDelete, commandError }: {
   account: Account; access: FinanceAccess; lang: Language; disabled: boolean;
   editor?: AccountEditor;
   notice?: FinanceCopyKey;
   onAccountChanged: (account: Account) => void; onReconcile: () => void;
   onEdit: (editor: AccountEditor) => void; onBusy: (busy: boolean) => void; onFinish: (result?: FinanceCopyKey) => void;
+  onDelete: (expectedAccountVersion: number) => void; commandError: string;
 }) {
   const t = financeCopy[lang];
   const accountId = account.accountId;
@@ -99,6 +100,10 @@ export function AccountManagement({ account, access, lang, disabled, editor, not
     if (editor?.kind !== 'card') void loadAccount();
     if (!editor || (editor.kind === 'card' && editor.cardId)) void loadCards();
   }, [focused, accountId]);
+
+  useEffect(() => {
+    if (focused && !editor && (commandError === 'VERSION_CONFLICT' || commandError === 'NOT_FOUND')) void loadAccount();
+  }, [commandError]);
 
   async function mutate(scope: Scope, success: FinanceCopyKey, write: () => Promise<void>) {
     if (!current() || disabled || writing.current) return;
@@ -169,6 +174,15 @@ export function AccountManagement({ account, access, lang, disabled, editor, not
     ]);
   }
 
+  function removeAccount() {
+    Alert.alert(t.deleteAccountTitle, `${snapshot.name}\n\n${t.deleteAccountExplanation}`, [
+      { text: copy[lang].cancel, style: 'cancel' },
+      { text: t.deleteAccount, style: 'destructive', onPress: () => {
+        if (current() && !writing.current) onDelete(snapshot.accountVersion);
+      } },
+    ]);
+  }
+
   const blocked = disabled || busy;
   const cardId = editor?.kind === 'card' ? editor.cardId : undefined;
   const card = cardId ? cards.find((entry) => entry.cardId === cardId) : undefined;
@@ -205,6 +219,7 @@ export function AccountManagement({ account, access, lang, disabled, editor, not
       </>}
       <FinanceButton title={snapshot.archived ? t.restoreAccount : t.archiveAccount} disabled={blocked} onPress={changeArchive}
         testID={snapshot.archived ? 'finance-restore-account' : 'finance-archive-account'} />
+      <FinanceButton title={t.deleteAccount} disabled={blocked} onPress={removeAccount} destructive testID="finance-delete-account" />
     </View>}
     {editor && accountLoad === 'ready' && snapshot.archived && <FinanceAlert>{t.unavailable}</FinanceAlert>}
     {!uncertain && editor?.kind === 'rename' && accountLoad === 'ready' && !snapshot.archived && <NameEditor
@@ -343,7 +358,7 @@ function CardEditor({ card, lang, disabled, onSave, onDelete, onCancel }: {
     <View style={layout.actions}>
       <FinanceButton title={t.saveChanges} primary disabled={disabled} onPress={save} testID="finance-card-save" />
       <FinanceButton title={copy[lang].cancel} disabled={disabled} onPress={onCancel} />
-      {onDelete && <FinanceButton title={t.deleteCard} disabled={disabled} onPress={onDelete} testID="finance-delete-card" />}
+      {onDelete && <FinanceButton title={t.deleteCard} disabled={disabled} onPress={onDelete} destructive testID="finance-delete-card" />}
     </View>
   </View>;
 }

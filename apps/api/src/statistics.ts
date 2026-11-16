@@ -57,6 +57,7 @@ export async function getStatistics(tx: Tx, userId: string, now: number, query: 
       JOIN movements m ON m.transaction_id = t.id AND m.transaction_version = v.version
       JOIN accounts a ON a.id = m.account_id AND a.user_id = t.user_id
       WHERE t.user_id = ${userId} AND t.kind IN ('income', 'expense') AND v.status = 'posted'
+        AND t.deleted_at IS NULL AND a.deleted_at IS NULL
         AND v.financial_date BETWEEN ${fromDate} AND ${throughDate}
         ${accountId === undefined ? sql`` : sql`AND a.id = ${accountId}`}
         ${categoryId === undefined ? sql`` : sql`AND v.category_id = ${categoryId}`}
@@ -79,7 +80,8 @@ export async function getStatistics(tx: Tx, userId: string, now: number, query: 
       ${beforeDate === undefined ? sql`` : sql`WHERE date < ${beforeDate} OR (date = ${beforeDate} AND transactionId < ${beforeId})`}
       ORDER BY date DESC, transactionId DESC LIMIT ${pageSize + 1}
     )
-    SELECT ${accountId === undefined ? sql`1` : sql`EXISTS(SELECT 1 FROM accounts WHERE id = ${accountId} AND user_id = ${userId})`}
+    SELECT ${accountId === undefined ? sql`1` : sql`EXISTS(
+      SELECT 1 FROM accounts WHERE id = ${accountId} AND user_id = ${userId} AND deleted_at IS NULL)`}
         AS accountAllowed,
       (SELECT JSON_ARRAYAGG(JSON_OBJECT('currency', currency,
         'incomeMinor', CAST(incomeMinor AS CHAR), 'expenseMinor', CAST(expenseMinor AS CHAR))) FROM totals) AS totals,

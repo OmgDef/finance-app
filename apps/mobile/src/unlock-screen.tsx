@@ -2,13 +2,14 @@ import { useEffect, useRef, useState } from 'react';
 import { AppState, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Language } from '@teta/contracts';
-import { brandBlue } from './brand-colors';
+import { appBrand, appVariant } from './app-variant';
 import { copy } from './copy';
 import { FinanceIcon } from './finance-icon';
 import { SupportScreen } from './support-screen';
 
-export const unlockBackground = brandBlue;
+export const unlockBackground = appBrand.brandColor;
 const foreground = '#FFFFFF';
+const isWallet = appVariant === 'b';
 const digits = [['1', '2', '3'], ['4', '5', '6'], ['7', '8', '9']];
 
 export function UnlockScreen({ lang, busy, message, languageError, canUseBiometrics, verifyingActivation,
@@ -144,13 +145,13 @@ const styles = StyleSheet.create({
   message: { color: foreground, fontSize: 14, textAlign: 'center' },
   grid: { gap: 14 },
   row: { flexDirection: 'row', gap: 14 },
-  key: { borderWidth: 2, borderColor: '#8895BF', alignItems: 'center', justifyContent: 'center' },
+  key: { borderWidth: 2, borderColor: isWallet ? '#93B2A4' : '#8895BF', alignItems: 'center', justifyContent: 'center' },
   digit: { color: foreground, fontVariant: ['tabular-nums'] },
-  pressed: { backgroundColor: '#3D4D8C', borderColor: foreground },
+  pressed: { backgroundColor: isWallet ? '#356959' : '#3D4D8C', borderColor: foreground },
   disabled: { opacity: 0.52 },
   footer: { alignItems: 'center', marginTop: 28 },
   linkTarget: { minHeight: 44, justifyContent: 'center', paddingHorizontal: 10 },
-  language: { color: '#E0E6FF', textAlign: 'center', fontSize: 14, fontWeight: '600' },
+  language: { color: isWallet ? '#DEEFE4' : '#E0E6FF', textAlign: 'center', fontSize: 14, fontWeight: '600' },
   recovery: { color: foreground, textAlign: 'center', fontSize: 18, fontWeight: '600', textDecorationLine: 'underline' },
   support: { backgroundColor: foreground, borderRadius: 12, padding: 14 },
 });

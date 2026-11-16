@@ -1,27 +1,31 @@
 import type { ExpoConfig } from 'expo/config';
 import bootsplash from 'react-native-bootsplash/expo';
-import { brandBlue } from './src/brand-colors.ts';
-import { copy } from './src/copy.ts';
+import { appVariants } from './src/app-variants.ts';
 
-const appIconForeground = './assets/app-icon/android-foreground.png';
+const appVariant = process.env.APP_VARIANT ?? 'a';
+if (appVariant !== 'a' && appVariant !== 'b') throw new Error('APP_VARIANT must be a or b.');
+const { name, brandColor } = appVariants[appVariant];
+const assets = appVariant === 'b' ? './assets/app-icon/wallet' : './assets/app-icon';
+const appIconForeground = `${assets}/android-foreground.png`;
 
 export default {
-  name: copy.en.appName,
+  name: name.en,
   slug: 'tetafinance',
   version: '0.1.0',
   scheme: 'tetafinance',
-  icon: './assets/app-icon/icon.png',
+  icon: `${assets}/icon.png`,
   platforms: ['ios', 'android'],
+  extra: { appVariant },
   plugins: [
     'expo-router',
     bootsplash({
-      logo: './assets/app-icon/splash-logo.png',
+      logo: `${assets}/splash-logo.png`,
       logoWidth: 134,
-      background: brandBlue,
+      background: brandColor,
       assetsOutput: '.expo/bootsplash',
       android: { darkContentBarsStyle: false },
     }),
-    ['expo-secure-store', { configureAndroidBackup: false, faceIDPermission: `Unlock ${copy.en.appName} with Face ID.` }],
+    ['expo-secure-store', { configureAndroidBackup: false, faceIDPermission: `Unlock ${name.en} with Face ID.` }],
     ['expo-image-picker', { photosPermission: 'Choose a photo for your profile.', cameraPermission: false, microphonePermission: false }],
     './src/installation-backup.cjs',
   ],
@@ -35,17 +39,17 @@ export default {
     adaptiveIcon: {
       foregroundImage: appIconForeground,
       monochromeImage: appIconForeground,
-      backgroundColor: brandBlue,
+      backgroundColor: brandColor,
     },
   },
   locales: {
     ru: {
       ios: {
-        CFBundleDisplayName: copy.ru.appName,
-        NSFaceIDUsageDescription: `Разблокируйте ${copy.ru.appName} с помощью Face ID.`,
+        CFBundleDisplayName: name.ru,
+        NSFaceIDUsageDescription: `Разблокируйте ${name.ru} с помощью Face ID.`,
         NSPhotoLibraryUsageDescription: 'Выберите фото для своего профиля.',
       },
-      android: { app_name: copy.ru.appName },
+      android: { app_name: name.ru },
     },
   },
 } satisfies ExpoConfig;

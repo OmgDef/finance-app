@@ -21,7 +21,7 @@ type MonthSection = { key: string; title: string; data: Entry[] };
 
 export function AccountOverview({ account, depositTerms, lang, categories, month, balanceSeries, balanceSeriesError,
   cards, cardsError, monthlyActivity, totalsError, history, historyBusy, historyError, accountError, refreshing, created,
-  onRefresh, onMore, onTransaction, onOpenCard, onManageCards, onReloadCards, statementTitle, onStatement }: {
+  onRefresh, onMore, onTransaction, onOpenCard, onReloadCards, statementTitle, onStatement }: {
   account?: Account;
   depositTerms: string;
   lang: Language;
@@ -43,7 +43,6 @@ export function AccountOverview({ account, depositTerms, lang, categories, month
   onMore: () => void;
   onTransaction: (id: string) => void;
   onOpenCard: (id: string) => void;
-  onManageCards: () => void;
   onReloadCards: () => void;
   statementTitle: string;
   onStatement: () => void;
@@ -103,15 +102,7 @@ export function AccountOverview({ account, depositTerms, lang, categories, month
         </View>
         <FinanceButton title={statementTitle} testID="finance-detail-statement" onPress={onStatement} />
         {(!!cards?.length || cardsError) && <View style={layout.cardSection}>
-          <View style={layout.cardHeader}>
-            <Text accessibilityRole="header" style={styles.section} testID="finance-detail-cards">{t.cards}</Text>
-            <Pressable accessibilityRole="button" accessibilityLabel={t.manageAccount}
-              onPress={onManageCards} testID="finance-detail-manage-cards"
-              style={({ pressed }) => [layout.manageCards, pressed && styles.dimmed]}>
-              <Text style={layout.manageCardsLabel}>{t.manageCards}</Text>
-              <FinanceIcon name="chevron" color={palette.accent} size={14} />
-            </Pressable>
-          </View>
+          <Text accessibilityRole="header" style={styles.section} testID="finance-detail-cards">{t.cards}</Text>
           {!!cards?.length && <View style={styles.surface}>
             {cards.map(({ cardId, name, lastFour, network }, index) => (
               <Pressable key={cardId} accessibilityRole="button" testID={'finance-detail-card-' + cardId}
@@ -213,9 +204,6 @@ const layout = StyleSheet.create({
   balanceMeta: { ...styles.meta, color: palette.balanceMuted },
   balanceAlert: { color: '#FFB4BB' },
   cardSection: { gap: 4 },
-  cardHeader: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', columnGap: 12 },
-  manageCards: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 4, flexShrink: 1 },
-  manageCardsLabel: { color: palette.accent, flexShrink: 1, fontSize: 14, fontWeight: '600' },
   linkedCard: { flexDirection: 'row', alignItems: 'center', minHeight: 54, gap: 10, paddingHorizontal: 12, paddingVertical: 8 },
   cardIdentity: { flex: 1, gap: 2 },
   cardDigits: { ...styles.meta, fontVariant: ['tabular-nums'] },

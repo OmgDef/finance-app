@@ -63,6 +63,7 @@ export async function runCommand<T>(withAccess: WithCommandAccess, command: Comm
 function commandTarget(input: CommandKey): string[] {
   if (input.command === 'schedule.skip') return [input.ruleId, input.date];
   if (input.command === 'schedule.replace') return [input.ruleId, input.accountId];
+  if (input.command === 'schedule.delete') return [input.ruleId];
   if ('transactionId' in input) return [input.transactionId];
   if ('fromAccountId' in input) return [input.fromAccountId, input.toAccountId];
   if ('accountId' in input) return [input.accountId];
@@ -73,6 +74,7 @@ function resultTarget(command: Command, result: CommandResult): string[] {
   if (command === 'account.create') return [];
   if ('occurrenceId' in result) return [result.ruleId, result.date];
   if ('replacementRule' in result) return [result.ruleId, result.accountId];
+  if ('ruleId' in result) return [result.ruleId];
   if ('fromAccount' in result) return [result.fromAccount.accountId, result.toAccount.accountId];
   if ('accountId' in result) return [result.accountId];
   return [result.transactionId];
@@ -93,7 +95,7 @@ async function readOutcome(tx: Tx, owner: string, actorId: string, role: ActorRo
   }
   if (input.command === 'schedule.replace') {
     if (!await one(tx, sql`SELECT id FROM accounts WHERE id = ${input.accountId} AND user_id = ${owner}`)) throw notFound;
-  } else if (input.command !== 'schedule.skip') {
+  } else if (!('ruleId' in input)) {
     const table = 'transactionId' in input ? 'transactions' : 'accounts';
     for (const id of new Set(targets)) {
       if (!await one(tx, sql`SELECT id FROM ${sql.identifier(table)} WHERE id = ${id} AND user_id = ${owner}`)) throw notFound;

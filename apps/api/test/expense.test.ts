@@ -208,7 +208,7 @@ test('Finance API against migrated MySQL', async (t) => {
       type: 'transfer', fromAccountId, toAccountId, fromAmountMinor: '10000', toAmountMinor: '9200',
       date: '2027-02-01', idempotencyKey: newKey(), comment: 'По выписке',
     } as const;
-    return { userId, session, transfer };
+    return { userId, session, transfer, newKey };
   }
 
   async function transferBalances(session: string, eur: string, usd: string) {
@@ -2000,6 +2000,177 @@ test('Finance API against migrated MySQL', async (t) => {
     [{ actor_id: adminId, actor_role: 'admin', object_id: result.adjustmentId }]);
   });
 
+  await t.test('Deleting an account clears its ledger and cards and reverses transfers on the other account', async () => {
+    const { userId, session, transfer, newKey } = await transferFixture();
+    const { fromAccountId: accountId, toAccountId: peer } = transfer;
+    const other = await fixture();
+    const cardInput = { name: 'Debit card', appearance: '#124ABC' };
+    const card = await send(app, 'createAccountCard', cardInput, session, accountId);
+    const peerCard = await send(app, 'createAccountCard', cardInput, session, peer);
+    assert.equal(card.statusCode, 200, card.body);
+    assert.equal(peerCard.statusCode, 200, peerCard.body);
+
+    const entry = await send(app, 'recordTransaction', expenseFor(accountId, newKey()), session);
+    const moved = await send(app, 'recordTransaction', expenseFor(accountId, newKey()), session);
+    assert.equal(entry.statusCode, 200, entry.body);
+    assert.equal(moved.statusCode, 200, moved.body);
+    const { transactionId: retainedId } = moved.json<SingleAccountResult>();
+    const scheduled = await send(app, 'createScheduleRule', scheduleInput(accountId, transfer.date), session);
+    assert.equal(scheduled.statusCode, 200, scheduled.body);
+    const { ruleId } = scheduled.json<Result<'createScheduleRule'>>();
+    const candidate = { userId, accountId, ruleId, date: transfer.date };
+    const due = await settle(candidate);
+    assert.ok(due?.status === 'posted');
+    for (const [id, amountMinor] of [[retainedId, '10000'], [due.transactionId, '4000']]) {
+      const revised = await send(app, 'reviseTransaction', {
+        ...expenseFor(peer, newKey()), amountMinor, expectedTransactionVersion: 1,
+      }, session, id);
+      assert.equal(revised.statusCode, 200, revised.body);
+    }
+    const recordedTransfer = await send(app, 'recordTransaction', transfer, session);
+    assert.equal(recordedTransfer.statusCode, 200, recordedTransfer.body);
+    const recorded = recordedTransfer.json<TransferResult>();
+    const adjustment = await send(app, 'reconcileAccountBalance', {
+      actualBalanceMinor: '15200', expectedAccountVersion: recorded.toAccount.accountVersion, explanation: 'Statement balance',
+      idempotencyKey: newKey(),
+    }, session, peer);
+    assert.equal(adjustment.statusCode, 200, adjustment.body);
+    assert.equal(adjustment.json<Result<'reconcileAccountBalance'>>().deltaMinor, '0');
+
+    const body = { idempotencyKey: newKey(), expectedAccountVersion: recorded.fromAccount.accountVersion };
+    const remove = (input = body, auth = session) => send(app, 'deleteAccount', input, auth, accountId);
+    expectError(await remove(body, other.session), 404, 'NOT_FOUND');
+    expectError(await remove({ ...body, expectedAccountVersion: 1 }), 409, 'VERSION_CONFLICT');
+    await db.execute(sql`ALTER TABLE accounts ADD CONSTRAINT test_reject_account_delete CHECK (id <> ${accountId} OR deleted_at IS NULL)`);
+    try {
+      expectError(await remove(), 500, 'INTERNAL_ERROR');
+      const balance = await send(app, 'getAccountBalance', undefined, session, peer);
+      assert.equal(balance.json<Result<'getAccountBalance'>>().balanceMinor, '15200');
+      const cards = (await send(app, 'listAccountCards', undefined, session, accountId)).json<Result<'listAccountCards'>>();
+      assert.deepEqual(cards.cards.map(({ cardId }) => cardId), [card.json<Result<'createAccountCard'>>().cardId]);
+      assert.equal((await send(app, 'getScheduleRule', undefined, session, ruleId)).statusCode, 200);
+    } finally {
+      await db.execute(sql`ALTER TABLE accounts DROP CHECK test_reject_account_delete`);
+    }
+
+    const deleted = await remove();
+    assert.equal(deleted.statusCode, 200, deleted.body);
+    assert.deepEqual(deleted.json(), { accountId, status: 'deleted' });
+    assert.deepEqual((await remove()).json(), deleted.json());
+    const key = { userId, command: 'account.delete', accountId, idempotencyKey: body.idempotencyKey } as const;
+    expectCommitted(await send(app, 'commandStatus', key, session), deleted);
+    expectCommitted(await send(restored, 'closeCommand', key, session), deleted);
+    expectError(await remove({ ...body, idempotencyKey: newKey() }), 404, 'NOT_FOUND');
+    for (const name of ['getAccountBalance', 'getAccountBalanceSeries', 'listAccountHistory', 'listBalanceAdjustments',
+      'listAccountCards', 'restoreAccount'] as const) {
+      expectError(await send(app, name, undefined, session, accountId), 404, 'NOT_FOUND');
+    }
+    expectError(await statistics(session, { accountId }), 404, 'NOT_FOUND');
+    expectError(await send(app, 'getScheduleRule', undefined, session, ruleId), 404, 'NOT_FOUND');
+    assert.equal(await settle(candidate), undefined);
+    assert.deepEqual(await rows(reader.db, sql`SELECT id FROM account_cards WHERE account_id = ${accountId}`), []);
+    for (const id of [entry.json<SingleAccountResult>().transactionId, due.transactionId, recorded.transactionId]) {
+      expectError(await send(app, 'listTransactionVersions', undefined, session, id), 404, 'NOT_FOUND');
+    }
+    assert.deepEqual((await readStatistics(session)).entries.map(({ transactionId }) => transactionId), [retainedId]);
+    const remaining = (await send(app, 'listAccounts', undefined, session)).json<Result<'listAccounts'>>();
+    assert.deepEqual(remaining.accounts.map(({ accountId, balanceMinor, needsReconciliation }) => [accountId, balanceMinor, needsReconciliation]),
+      [[peer, '10000', true]]);
+    assert.deepEqual(remaining.cardPreviews?.map(({ accountId }) => accountId), [peer]);
+    const history = (await send(app, 'listAccountHistory', undefined, session, peer)).json<Result<'listAccountHistory'>>();
+    assert.deepEqual(history.entries.filter(({ type }) => type === 'transfer'), []);
+    assert.deepEqual((await send(app, 'getCurrencySummary', undefined, session)).json(), {
+      balances: [{ currency: 'EUR', balanceMinor: '10000' }],
+    });
+  });
+
+  await t.test('An archived account can be deleted while linked archived balances remain protected', async () => {
+    const { userId, accountId, session, newKey } = await fixture();
+    const peer = randomUUID();
+    await db.execute(sql`INSERT INTO accounts (id, user_id, name, currency, start_date, opening_balance_minor)
+      VALUES (${peer}, ${userId}, 'Archived EUR account', 'EUR', '2027-01-01', -10000)`);
+    const transfer = await send(app, 'recordTransaction', {
+      type: 'transfer', fromAccountId: accountId, toAccountId: peer, fromAmountMinor: '10000', toAmountMinor: '10000',
+      date: '2027-02-01', idempotencyKey: newKey(),
+    }, session);
+    assert.equal(transfer.statusCode, 200, transfer.body);
+    const archived = await send(app, 'archiveAccount', undefined, session, peer);
+    assert.equal(archived.statusCode, 200, archived.body);
+    expectError(await send(app, 'deleteAccount', { idempotencyKey: newKey(), expectedAccountVersion: 2 }, session, accountId),
+      409, 'ACCOUNT_UNAVAILABLE');
+    const deleted = await send(app, 'deleteAccount', { idempotencyKey: newKey(),
+      expectedAccountVersion: archived.json<Result<'archiveAccount'>>().accountVersion }, session, peer);
+    assert.equal(deleted.statusCode, 200, deleted.body);
+    const balance = await send(app, 'getAccountBalance', undefined, session, accountId);
+    assert.equal(balance.json<Result<'getAccountBalance'>>().balanceMinor, '100000');
+    expectError(await send(app, 'restoreAccount', undefined, session, peer), 404, 'NOT_FOUND');
+  });
+
+  await t.test('Administrative card and account deletion enforce scope and audit the administrator', async () => {
+    const { userId, accountId, session, newKey } = await fixture();
+    const other = await fixture();
+    const { adminId, headers } = await adminSessionHeaders();
+    const card = await send(app, 'createAccountCard', { name: 'Debit card', appearance: '#124ABC' }, session, accountId);
+    assert.equal(card.statusCode, 200, card.body);
+    const { cardId } = card.json<Result<'createAccountCard'>>();
+    function adminSend<K extends Route>(name: K, body?: Body<K>, owner = userId, csrf = headers['x-csrf-token']) {
+      const { method, url } = routes[name];
+      return app.inject({ method, url: url.replace(':userId', owner).replace(':accountId', accountId).replace(':cardId', cardId),
+        payload: body, remoteAddress: '192.0.2.1', headers: { ...headers, 'x-csrf-token': csrf } });
+    }
+    expectError(await adminSend('adminListAccountCards', undefined, other.userId), 404, 'NOT_FOUND');
+    const cards = await adminSend('adminListAccountCards');
+    assert.equal(cards.statusCode, 200, cards.body);
+    assert.deepEqual(cards.json(), { cards: [card.json()] });
+    expectError(await adminSend('adminDeleteAccountCard', undefined, other.userId), 404, 'NOT_FOUND');
+    expectError(await adminSend('adminDeleteAccountCard', undefined, userId, ''), 403, 'CSRF_INVALID');
+    const deletedCard = await adminSend('adminDeleteAccountCard');
+    assert.equal(deletedCard.statusCode, 200, deletedCard.body);
+    assert.deepEqual((await adminSend('adminListAccountCards')).json(), { cards: [] });
+    const balance = await send(app, 'getAccountBalance', undefined, session, accountId);
+    assert.equal(balance.json<Result<'getAccountBalance'>>().balanceMinor, '100000');
+
+    const idempotencyKey = newKey();
+    const reason = 'Remove an unused account';
+    const body = { idempotencyKey, expectedAccountVersion: 1, reason };
+    expectError(await adminSend('adminDeleteAccount', body, other.userId), 404, 'NOT_FOUND');
+    expectError(await adminSend('adminDeleteAccount', { ...body, reason: ' ' }), 400, 'INVALID_REQUEST');
+    expectError(await adminSend('adminDeleteAccount', body, userId, ''), 403, 'CSRF_INVALID');
+    const deleted = await adminSend('adminDeleteAccount', body);
+    assert.equal(deleted.statusCode, 200, deleted.body);
+    expectCommitted(await adminSend('adminCommandStatus', { command: 'account.delete', userId, accountId, idempotencyKey }), deleted);
+    assert.deepEqual(await rows(reader.db, sql`SELECT event, object_id AS objectId, transition FROM audit_events
+      WHERE actor_id = ${adminId} AND actor_role = 'admin' AND user_id = ${userId} ORDER BY event`), [
+      { event: 'finance.account.deleted', objectId: accountId, transition: { from: '1', to: 'deleted', reason } },
+      { event: 'finance.card.deleted', objectId: cardId, transition: null },
+    ]);
+  });
+
+  await t.test('Deleting an account and posting a scheduled date serialize in both orders', async () => {
+    for (const postFirst of [false, true]) {
+      const { userId, accountId, session, newKey } = await fixture();
+      const ruleId = await scheduleRule(accountId);
+      const candidate = { userId, accountId, ruleId, date: '2027-02-01' };
+      const post = () => settle(candidate);
+      const remove = (version = 1) => send(app, 'deleteAccount', {
+        idempotencyKey: newKey(), expectedAccountVersion: version,
+      }, session, accountId);
+      const [deleted, posted] = postFirst
+        ? await runScheduleRace(userId, accountId, post, remove).then(([posted, removed]) => [removed, posted] as const)
+        : await runScheduleRace(userId, accountId, remove, post);
+      if (postFirst) {
+        assert.equal(posted?.status, 'posted');
+        expectError(deleted, 409, 'VERSION_CONFLICT');
+        const retry = await remove(2);
+        assert.equal(retry.statusCode, 200, retry.body);
+      } else {
+        assert.equal(deleted.statusCode, 200, deleted.body);
+        assert.equal(posted, undefined);
+      }
+      assert.equal(await post(), undefined);
+    }
+  });
+
   await t.test('Only a zero-balance account can be archived and restored with its history intact', async () => {
     const { userId, accountId, session, expense } = await fixture();
     const other = await fixture();
@@ -2641,6 +2812,156 @@ test('Finance API against migrated MySQL', async (t) => {
         expectError(archived, 409, 'SCHEDULE_FUTURE_DATES');
       }
     }
+  });
+
+  await t.test('Deleting a rule removes all its transactions, including revised and already voided ones', async (t) => {
+    const previousNow = now;
+    t.after(() => { now = previousNow; });
+    now = Date.parse('2027-02-16T04:00:00Z');
+    const { userId, accountId, session, newKey, expense } = await fixture();
+    const other = await fixture();
+    const destination = randomUUID();
+    await db.execute(sql`INSERT INTO accounts (id, user_id, name, currency, start_date, opening_balance_minor)
+      VALUES (${destination}, ${userId}, 'Other EUR account', 'EUR', '2027-01-01', 50000)`);
+    const created = await send(app, 'createScheduleRule', scheduleInput(accountId, '2027-02-01'), session);
+    assert.equal(created.statusCode, 200, created.body);
+    const { ruleId, ruleVersion } = created.json<Result<'createScheduleRule'>>();
+    const transactionIds: string[] = [];
+    for (const date of ['2027-02-01', '2027-02-08', '2027-02-15']) {
+      const outcome = await settle({ userId, accountId, ruleId, date });
+      assert.ok(outcome?.status === 'posted');
+      transactionIds.push(outcome.transactionId);
+    }
+    const [posted, moved, voided] = transactionIds;
+    const revised = await send(app, 'reviseTransaction', {
+      ...expense, accountId: destination, date: '2027-02-08', amountMinor: '12000', expectedTransactionVersion: 1, idempotencyKey: newKey(),
+    }, session, moved);
+    assert.equal(revised.statusCode, 200, revised.body);
+    const priorVoid = await send(app, 'voidTransaction', { expectedTransactionVersion: 1, idempotencyKey: newKey() }, session, voided);
+    assert.equal(priorVoid.statusCode, 200, priorVoid.body);
+    const manual = await send(app, 'recordTransaction', expense, session);
+    assert.equal(manual.statusCode, 200, manual.body);
+    const { transactionId: manualId } = manual.json<SingleAccountResult>();
+    const reconciled = await send(app, 'reconcileAccountBalance', {
+      idempotencyKey: newKey(), expectedAccountVersion: 2, actualBalanceMinor: '38000', explanation: 'Bank statement',
+    }, session, destination);
+    assert.equal(reconciled.statusCode, 200, reconciled.body);
+    const { adjustmentId } = reconciled.json<Result<'reconcileAccountBalance'>>();
+
+    const body = { idempotencyKey: newKey(), expectedRuleVersion: ruleVersion };
+    const remove = (input = body, auth = session) => send(app, 'deleteScheduleRule', input, auth, ruleId);
+    expectError(await remove(body, other.session), 404, 'NOT_FOUND');
+    expectError(await remove({ ...body, expectedRuleVersion: ruleVersion + 1 }), 409, 'VERSION_CONFLICT');
+
+    await db.execute(sql`ALTER TABLE schedule_rules ADD CONSTRAINT test_reject_schedule_delete
+      CHECK (id <> ${ruleId} OR deleted_at IS NULL)`);
+    try {
+      expectError(await remove(), 500, 'INTERNAL_ERROR');
+      const balance = await send(app, 'getAccountBalance', undefined, session, destination);
+      assert.equal(balance.json<Result<'getAccountBalance'>>().balanceMinor, '38000');
+      const detail = await send(app, 'listTransactionVersions', undefined, session, moved);
+      assert.equal(detail.json<Result<'listTransactionVersions'>>().transactionVersion, 2);
+      assert.equal((await send(app, 'getScheduleRule', undefined, session, ruleId)).statusCode, 200);
+    } finally {
+      await db.execute(sql`ALTER TABLE schedule_rules DROP CHECK test_reject_schedule_delete`);
+    }
+
+    const deleted = await remove();
+    assert.equal(deleted.statusCode, 200, deleted.body);
+    assert.deepEqual(deleted.json(), { ruleId, status: 'deleted' });
+    const replayed = await remove();
+    assert.equal(replayed.statusCode, 200, replayed.body);
+    assert.deepEqual(replayed.json(), deleted.json());
+    const key = { userId, command: 'schedule.delete', ruleId, idempotencyKey: body.idempotencyKey } as const;
+    expectCommitted(await send(app, 'commandStatus', key, session), deleted);
+    expectCommitted(await send(restored, 'closeCommand', key, session), deleted);
+    expectError(await remove({ ...body, idempotencyKey: newKey() }), 404, 'NOT_FOUND');
+
+    expectError(await send(app, 'getScheduleRule', undefined, session, ruleId), 404, 'NOT_FOUND');
+    expectError(await occurrences(session, '2027-02-01', '2027-02-28', ruleId), 404, 'NOT_FOUND');
+    assert.deepEqual((await send(app, 'listScheduleRules', undefined, session)).json(), { rules: [] });
+    assert.deepEqual((await send(app, 'getNextPayment', undefined, session)).json(), { payment: null });
+    for (const [id, expectedBalance, remainingEntry] of [[accountId, '90000', manualId], [destination, '50000', adjustmentId]]) {
+      const balance = await send(app, 'getAccountBalance', undefined, session, id);
+      assert.equal(balance.json<Result<'getAccountBalance'>>().balanceMinor, expectedBalance);
+      if (id === destination) assert.equal(balance.json<Result<'getAccountBalance'>>().needsReconciliation, true);
+      const history = await send(app, 'listAccountHistory', undefined, session, id);
+      assert.deepEqual(history.json<Result<'listAccountHistory'>>().entries.map((entry) => entry.id), [remainingEntry, id]);
+    }
+    assert.deepEqual((await readStatistics(session)).entries.map((entry) => entry.transactionId), [manualId]);
+    for (const [id, version] of [[posted, 2], [moved, 3], [voided, 2]] as const) {
+      expectError(await send(app, 'listTransactionVersions', undefined, session, id), 404, 'NOT_FOUND');
+      assert.deepEqual(await one(reader.db, sql`SELECT v.status, v.version FROM transactions tx
+        JOIN transaction_versions v ON v.transaction_id = tx.id AND v.version = tx.current_version WHERE tx.id = ${id}`),
+      { status: 'void', version });
+    }
+  });
+
+  await t.test('Deleting a rule and posting its next date serialize in either order', async () => {
+    for (const postFirst of [false, true]) {
+      const { userId, accountId, session, newKey } = await fixture();
+      const created = await send(app, 'createScheduleRule', scheduleInput(accountId, '2027-02-01'), session);
+      assert.equal(created.statusCode, 200, created.body);
+      const { ruleId, ruleVersion } = created.json<Result<'createScheduleRule'>>();
+      const remove = () => send(app, 'deleteScheduleRule', { expectedRuleVersion: ruleVersion, idempotencyKey: newKey() }, session, ruleId);
+      const candidate = { userId, accountId, ruleId, date: '2027-02-01' };
+      const post = () => settle(candidate);
+      const [deleted, outcome] = postFirst
+        ? await runScheduleRace(userId, accountId, post, remove).then(([posted, removed]) => [removed, posted] as const)
+        : await runScheduleRace(userId, accountId, remove, post);
+      assert.equal(deleted.statusCode, 200, deleted.body);
+      assert.equal(outcome?.status, postFirst ? 'posted' : undefined);
+      assert.equal(await post(), undefined);
+      const balance = await send(app, 'getAccountBalance', undefined, session, accountId);
+      assert.equal(balance.json<Result<'getAccountBalance'>>().balanceMinor, '100000');
+    }
+  });
+
+  await t.test('Deleting a replacement with an audit reason preserves the earlier series and its cutoff', async (t) => {
+    const previousNow = now;
+    t.after(() => { now = previousNow; });
+    const f = await replacementFixture();
+    now = Date.parse('2027-02-01T04:00:00Z');
+    let session = await renewMobileSession(f.installationSecret);
+    const replaced = await f.apply(f.input(await f.preview(f.ruleId, session)), f.ruleId, session);
+    assert.equal(replaced.statusCode, 200, replaced.body);
+    const { transitionAt, replacementRule } = replaced.json<Result<'replaceScheduleRule'>>();
+    const { ruleId, ruleVersion } = replacementRule;
+    now = transitionAt;
+    session = await renewMobileSession(f.installationSecret);
+    const oldDate = { userId: f.userId, accountId: f.accountId, ruleId: f.ruleId, date: '2027-02-01' };
+    const earlier = await settle(oldDate);
+    const later = await settle({ ...oldDate, accountId: f.target, ruleId, date: replacementRule.firstDate });
+    assert.equal(earlier?.status, 'posted');
+    assert.equal(later?.status, 'posted');
+
+    const { adminId, headers } = await adminSessionHeaders();
+    const { url } = routes.adminDeleteScheduleRule;
+    const path = url.replace(':userId', f.userId).replace(':ruleId', ruleId);
+    const adminPost = (url: string, payload: object, requestHeaders = headers) =>
+      app.inject({ method: 'POST', url, payload, remoteAddress: '192.0.2.1', headers: requestHeaders });
+    const command = { idempotencyKey: f.newKey(), expectedRuleVersion: ruleVersion };
+    const reason = 'Remove replacement charges';
+    expectError(await adminPost(path, command), 400, 'INVALID_REQUEST');
+    expectError(await adminPost(path, { ...command, reason }, { ...headers, 'x-csrf-token': '' }), 403, 'CSRF_INVALID');
+    const deleted = await adminPost(path, { ...command, reason });
+    assert.equal(deleted.statusCode, 200, deleted.body);
+    expectCommitted(await adminPost(routes.adminCommandStatus.url, { command: 'schedule.delete', userId: f.userId, ruleId,
+      idempotencyKey: command.idempotencyKey }), deleted);
+    const events = await rows(reader.db, sql`SELECT event, transition FROM audit_events WHERE actor_id = ${adminId}
+      AND object_id IN (${ruleId}, ${later.transactionId}) ORDER BY event`);
+    assert.deepEqual(events, [
+      { event: 'schedule.rule.deleted', transition: { from: '1', to: 'deleted', reason } },
+      { event: 'transaction.voided', transition: { from: '1', to: '2', reason } },
+    ]);
+    const earlierRule = await send(app, 'getScheduleRule', undefined, session, f.ruleId);
+    assert.equal(earlierRule.statusCode, 200, earlierRule.body);
+    assert.equal(earlierRule.json<Result<'getScheduleRule'>>().state, 'ended');
+    assert.equal(earlierRule.json<Result<'getScheduleRule'>>().replacedBy, undefined);
+    const dates = await occurrences(session, '2027-02-13', '2027-02-22', f.ruleId);
+    assert.deepEqual(dates.json(), { occurrences: [] });
+    assert.equal((await send(app, 'listTransactionVersions', undefined, session, earlier.transactionId)).statusCode, 200);
+    expectError(await send(app, 'listTransactionVersions', undefined, session, later.transactionId), 404, 'NOT_FOUND');
   });
 
   await t.test('A linked rule can be replaced after its UTC start when the local date falls back', async (t) => {

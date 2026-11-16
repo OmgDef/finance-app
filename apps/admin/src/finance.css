@@ -8,6 +8,7 @@
 .finance-title .breadcrumb { margin-bottom: 8px; }
 .user-search { margin-block: 20px 16px; }
 .text-button { border-color: transparent; background: transparent; color: var(--accent); padding-inline: 8px; }
+button.destructive { color: #9e2828; }
 a.text-button { display: inline-flex; min-height: 44px; align-items: center; font-size: 14px; font-weight: 600; text-decoration: none; }
 a.text-button[aria-disabled="true"] { opacity: .5; }
 .ledger-layout { display: grid; grid-template-columns: minmax(245px, .95fr) minmax(0, 2.05fr); gap: 24px; align-items: start; }

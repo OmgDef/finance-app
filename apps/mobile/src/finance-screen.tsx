@@ -10,6 +10,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useAccessSession } from './access-session';
 import type { Language, Result } from '@teta/contracts';
 import { request } from './api';
+import { appVariant } from './app-variant';
 import { copy } from './copy';
 import { AccountManagement } from './finance-account-management';
 import { AccountOverview } from './finance-account-overview';
@@ -44,19 +45,21 @@ type Category = Result<'listCategories'>['categories'][number];
 type Page = { name: Exclude<FinanceTab, 'settings'> } | FinancePage;
 type Receipt = { command: FinanceCommand; result: CommandResult };
 type RouteReceipt = Receipt & { path: string; returnFrom?: string };
-type Destination = { page: FinancePage; returnToOrigin?: boolean; dismissTo?: boolean; receipt?: Receipt };
+type Destination = { page: FinancePage; returnToOrigin?: boolean; dismissTo?: boolean; receipt?: Receipt } |
+  { deletedAccountId: string };
 type AccountNotice = { accountId: string; key: FinanceCopyKey };
 
-function localizedError(code: string, lang: Language, context?: 'reconcile' | 'schedule' | 'replace') {
+function localizedError(code: string, lang: Language, context?: 'reconcile' | 'schedule' | 'replace' | 'deleteAccount') {
   const t = financeCopy[lang];
   const s = scheduleCopy[lang];
   switch (code) {
     case 'INVALID_REQUEST': return t.invalidRequest;
-    case 'ACCOUNT_UNAVAILABLE':
+    case 'ACCOUNT_UNAVAILABLE': return context === 'deleteAccount' ? t.deleteAccountArchivedLink
+      : context === 'schedule' ? s.restoreAccount : t.unavailable;
     case 'NOT_FOUND': return t.unavailable;
     case 'IDEMPOTENCY_CONFLICT': return t.conflict;
     case 'VERSION_CONFLICT': return context === 'replace' ? s.replacementChanged
-      : context === 'reconcile' ? t.accountVersionConflict : t.versionConflict;
+      : context === 'reconcile' || context === 'deleteAccount' ? t.accountVersionConflict : t.versionConflict;
     case 'SCHEDULE_DATES_PENDING': return t.reconcilePendingDates;
     case 'SCHEDULE_DATE_CONFLICT': return context === 'schedule' ? s.skipChanged : t.reconcileScheduleChanged;
     case 'SCHEDULE_REPLACEMENT_CONFLICT': return s.replacementChanged;
@@ -162,12 +165,24 @@ function useWorkspaceModel(access: FinanceAccess, lang: Language) {
     }
     void loadAccounts();
     invalidate();
-    if ('occurrenceId' in result || 'replacementRule' in result) {
+    if ('accountId' in result && 'status' in result && result.status === 'deleted') {
+      setAccounts((previous) => previous?.filter(({ accountId }) => accountId !== result.accountId));
+      setCardPreviews((previous) => previous.filter(({ accountId }) => accountId !== result.accountId));
+      setDestination({ deletedAccountId: result.accountId });
+    } else if ('occurrenceId' in result || 'replacementRule' in result) {
       const skipping = 'occurrenceId' in result;
       const ruleId = skipping ? result.ruleId : result.replacementRule.ruleId;
       const date = skipping ? result.date : result.replacementRule.firstDate;
       setDestination({ page: { name: 'schedule', accountId: current.accountId ?? null, ruleId,
         offset: scheduleOffset(access.profile.today, date) }, returnToOrigin: skipping && current.pathname.includes('/skip/'), receipt });
+    } else if ('ruleId' in result) {
+      const accountId = current.accountId ?? null;
+      const rulePath = financePath({ name: 'schedule', accountId, ruleId: result.ruleId });
+      if (current.pathname === rulePath || current.pathname.startsWith(rulePath + '/')) {
+        setDestination({ page: { name: 'schedule', accountId, section: 'rules' }, dismissTo: true, receipt });
+      } else if (current.pathname === '/schedule') {
+        setReceipt({ ...receipt, path: current.pathname });
+      } else Alert.alert(scheduleCopy[lang].ruleDeleted);
     } else if ('transactionId' in result) {
       const page = { name: 'transaction' as const, transactionId: result.transactionId };
       const path = financePath(page);
@@ -184,6 +199,15 @@ function useWorkspaceModel(access: FinanceAccess, lang: Language) {
   useEffect(() => {
     if (!destination || command.busy || !access.isCurrent()) return;
     setDestination(undefined);
+    if ('deletedAccountId' in destination) {
+      const path = financePath({ name: 'history', accountId: destination.deletedAccountId });
+      if (pathname === path || pathname.startsWith(path + '/')) {
+        if (router.canDismiss()) router.dismissAll();
+        router.navigate('/(app)/(tabs)/accounts');
+      }
+      Alert.alert(financeCopy[lang].accountDeleted);
+      return;
+    }
     const path = financePath(destination.page);
     if (destination.page.name === 'schedule' && pathname !== '/schedule' && !pathname.startsWith('/schedule/')) {
       const result = destination.receipt?.result;
@@ -352,16 +376,18 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
   };
   const transactionLabels = { expense: t.expense, income: t.income, transfer: t.newTransfer };
   const commandLabels: Record<FinanceCommand, string> = {
-    'account.create': t.addAccount, 'expense.record': t.expense, 'income.record': t.income, 'transfer.record': t.newTransfer,
+    'account.create': t.addAccount, 'account.delete': t.deleteAccount,
+    'expense.record': t.expense, 'income.record': t.income, 'transfer.record': t.newTransfer,
     'transaction.revise': t.editTransaction, 'transaction.void': t.voidTransaction,
     'account.reconcile': t.reconcileAccount,
-    'schedule.skip': s.skip, 'schedule.replace': s.replace,
+    'schedule.skip': s.skip, 'schedule.replace': s.replace, 'schedule.delete': s.deleteRule,
   };
   const receiptLabels: Record<FinanceCommand, string> = {
-    'account.create': t.accountCreated, 'expense.record': t.expenseSaved, 'income.record': t.incomeSaved,
+    'account.create': t.accountCreated, 'account.delete': t.accountDeleted,
+    'expense.record': t.expenseSaved, 'income.record': t.incomeSaved,
     'transfer.record': t.transferSaved, 'transaction.revise': t.revisionSaved, 'transaction.void': t.transactionVoided,
     'account.reconcile': t.reconciled,
-    'schedule.skip': s.dateSkipped, 'schedule.replace': s.ruleReplaced,
+    'schedule.skip': s.dateSkipped, 'schedule.replace': s.ruleReplaced, 'schedule.delete': s.ruleDeleted,
   };
   const activeTransaction = transaction.data;
   const currentVersion = activeTransaction?.versions.find(({ version }) => version === activeTransaction.transactionVersion);
@@ -515,7 +541,6 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
         statementTitle={statementCopy[lang].title} onStatement={() => go({ name: 'statement', accountId: page.accountId })}
         created={receipt?.command === 'account.create'}
         onOpenCard={(cardId) => go({ name: 'cardDetails', accountId: page.accountId, cardId })}
-        onManageCards={() => go({ name: 'manage', accountId: page.accountId })}
         onReloadCards={() => void linkedCards.load()}
         onTransaction={(transactionId) => go({ name: 'transaction', transactionId })}
         onMore={() => {
@@ -583,7 +608,8 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
       </View>}
       {!command.reading && command.error !== '' &&
         <FinanceAlert testID="finance-command-message">{localizedError(command.error, lang,
-          page.name === 'schedule' ? page.editor === 'replace' ? 'replace' : 'schedule' : reconciling ? 'reconcile' : undefined)}</FinanceAlert>}
+          page.name === 'schedule' ? page.editor === 'replace' ? 'replace' : 'schedule'
+            : page.name === 'manage' ? 'deleteAccount' : reconciling ? 'reconcile' : undefined)}</FinanceAlert>}
       {transactionId && transactionChanged && <FinanceButton title={t.reloadTransaction}
         onPress={() => {
           command.clearError();
@@ -661,6 +687,9 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
         {timeZoneSuggestion}
         <ProfileHeader focused={focused} refresh={profileRefresh} />
         {accounts && <BalanceCard accounts={activeAccounts} lang={lang} />}
+        {appVariant === 'b' && activeAccounts.length > 0 && <FinanceButton title={t.expense} icon="expense" primary
+          disabled={blocked} onPress={() => go({ name: 'record', kind: 'expense', accountId: null })}
+          testID="finance-wallet-expense" />}
         {accounts && <View style={layout.section}>
           <Text accessibilityRole="header" style={styles.section}>{t.myAccounts}</Text>
           {activeAccounts.length ? <View style={[styles.surface, layout.accountGroup]}>
@@ -730,6 +759,8 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
         key={account.accountId} account={account} access={access} lang={lang} disabled={blocked}
         editor={page.name === 'accountEditor' ? page.editor : undefined} onAccountChanged={updateAccount}
         notice={page.name === 'manage' && accountNotice?.accountId === account.accountId ? accountNotice.key : undefined}
+        commandError={command.error} onDelete={(expectedAccountVersion) => void command.submit({ kind: 'account.delete',
+          accountId: account.accountId, body: { expectedAccountVersion } })}
         onBusy={setLocalWrite}
         onEdit={(editor) => {
           setAccountNotice(undefined);

@@ -6,12 +6,19 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SafeAreaView as NativeTabsSafeAreaView } from 'react-native-screens/experimental';
 import { currencySymbol } from '@teta/contracts/money';
 import type { Currency } from '@teta/contracts/money';
+import { appBrand, appVariant } from './app-variant';
 import { FinanceIcon } from './finance-icon';
 import type { FinanceIconName } from './finance-icon';
 
-export const palette = {
+const isWallet = appVariant === 'b';
+
+export const palette = isWallet ? {
+  ground: '#F6F2E9', panel: '#FFFFFF', raised: '#EFEFE5', ink: '#20362E', muted: '#52645B',
+  line: '#DFE3D8', control: '#75887E', danger: '#A12F3A', accent: appBrand.brandColor, selected: '#E1EFE6',
+  positive: '#286648', balanceSurface: '#23483B', balanceMuted: '#C6DACD',
+} : {
   ground: '#F5F7FA', panel: '#FFFFFF', raised: '#EDF1F6', ink: '#17263A', muted: '#53647A',
-  line: '#E2E8F0', control: '#8594A7', danger: '#AD343E', accent: '#2459B2', selected: '#E9F1FF',
+  line: '#E2E8F0', control: '#8594A7', danger: '#AD343E', accent: appBrand.brandColor, selected: '#E9F1FF',
   positive: '#226349',
   balanceSurface: '#191F29', balanceMuted: '#C0CAD8',
 };
@@ -43,7 +50,8 @@ export function FinanceScrollView({ children, nativeTab, ...props }: ComponentPr
 }
 
 export function FinanceMark({ size = 29 }: { size?: number }) {
-  return <Image source={require('../assets/theta.png')} style={[styles.brandMark, { width: size, height: size }]} accessible={false}
+  const source = isWallet ? require('../assets/app-icon/wallet/splash-logo.png') : require('../assets/theta.png');
+  return <Image source={source} style={[isWallet ? styles.walletMark : styles.brandMark, { width: size, height: size }]} accessible={false}
     importantForAccessibility="no" />;
 }
 
@@ -54,15 +62,15 @@ export function FinanceBrand({ title }: { title: string }) {
   </View>;
 }
 
-export function FinanceButton({ title, onPress, primary, disabled, testID, icon }: {
-  title: string; onPress: () => void; primary?: boolean; disabled?: boolean; testID?: string; icon?: FinanceIconName;
+export function FinanceButton({ title, onPress, primary, destructive, disabled, testID, icon }: {
+  title: string; onPress: () => void; primary?: boolean; destructive?: boolean; disabled?: boolean; testID?: string; icon?: FinanceIconName;
 }) {
   return <Pressable accessibilityRole="button" accessibilityState={{ disabled: !!disabled }} disabled={disabled}
     testID={testID} onPress={onPress} style={({ pressed }) => [
       styles.button, primary && styles.primary, (disabled || pressed) && styles.dimmed,
     ]}>
     {icon && <FinanceIcon name={icon} color={primary ? palette.panel : palette.accent} size={16} />}
-    <Text style={[styles.buttonText, primary && styles.primaryText]}>{title}</Text>
+    <Text style={[styles.buttonText, primary && styles.primaryText, destructive && styles.alert]}>{title}</Text>
   </Pressable>;
 }
 
@@ -116,11 +124,12 @@ export const styles = StyleSheet.create({
   brand: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1 },
   // The visible outline in theta.png is 234 × 250 within a square canvas.
   brandMark: { transform: [{ scaleY: 234 / 250 }] },
+  walletMark: { tintColor: palette.accent },
   brandTitle: { color: palette.ink, fontSize: 15, fontWeight: '700', flexShrink: 1 },
   heading: { color: palette.ink, fontSize: 27, fontWeight: '700' },
   section: { color: palette.ink, fontSize: 19, fontWeight: '700' },
   groupTitle: { color: palette.ink, fontSize: 15, fontWeight: '600' },
-  surface: { backgroundColor: palette.panel, borderRadius: 12, borderWidth: 1, borderColor: palette.line },
+  surface: { backgroundColor: palette.panel, borderRadius: isWallet ? 20 : 12, borderWidth: 1, borderColor: palette.line },
   title: { color: palette.ink, fontSize: 16, fontWeight: '600', flexShrink: 1 },
   label: { color: palette.ink, fontSize: 15 },
   meta: { color: palette.muted, fontSize: 14, flexShrink: 1 },

@@ -37,9 +37,11 @@ type CalendarRow = Omit<CalendarRule, 'versions'> & {
   failures: (ScheduleFailure & { date: string })[] | null;
   replacesRuleId: string | null;
   previousTransitionDate: string | null;
+  predecessorDeletedAt: number | null;
   replacedByRuleId: string | null;
   successorCreatedAt: number | null;
   successorStartsAt: number | null;
+  successorDeletedAt: number | null;
 };
 type ScheduleSelection = NonNullable<Body<'reconcileAccountBalance'>['skippedDates']>[number];
 type PreviewDate = Result<'previewBalanceAdjustment'>['dates'][number];
@@ -84,7 +86,8 @@ async function readCalendars(db: Runner, userId: string | undefined, asOf: numbe
       r.starts_at AS startsAt, r.ends_before_date AS endsBeforeDate, r.processed_through AS processedThrough,
       r.recovery_held AS recoveryHeld, a.currency,
       r.replaces_rule_id AS replacesRuleId, p.ends_before_date AS previousTransitionDate,
-      s.id AS replacedByRuleId, s.created_at AS successorCreatedAt, s.starts_at AS successorStartsAt,
+      p.deleted_at AS predecessorDeletedAt, s.id AS replacedByRuleId, s.created_at AS successorCreatedAt,
+      s.starts_at AS successorStartsAt, s.deleted_at AS successorDeletedAt,
       (SELECT JSON_ARRAYAGG(JSON_OBJECT(
         'version', v.version, 'acceptedAt', v.accepted_at, 'effectiveAt', v.effective_at,
         'amountMinor', CAST(v.amount_minor AS CHAR), 'categoryId', v.category_id,
@@ -99,10 +102,12 @@ async function readCalendars(db: Runner, userId: string | undefined, asOf: numbe
     FROM schedule_rules r JOIN accounts a ON a.id = r.account_id
     LEFT JOIN schedule_rules p ON p.id = r.replaces_rule_id
     LEFT JOIN schedule_rules s ON s.replaces_rule_id = r.id
-    WHERE r.created_at <= ${asOf} AND ${filter} ${userId === undefined ? sql`` : sql`AND a.user_id = ${userId}`}
+    WHERE r.deleted_at IS NULL AND a.deleted_at IS NULL AND r.created_at <= ${asOf} AND ${filter}
+      ${userId === undefined ? sql`` : sql`AND a.user_id = ${userId}`}
     ORDER BY r.id ${limit === undefined ? sql`` : sql`LIMIT ${limit}`}`);
   return rules.map(({ userId, versions, zones, processedThrough, recoveryHeld, outcomes, failures, currency, replacesRuleId,
-    previousTransitionDate, replacedByRuleId, successorCreatedAt, successorStartsAt, endsBeforeDate, ...fields }) => {
+    previousTransitionDate, predecessorDeletedAt, replacedByRuleId, successorCreatedAt, successorStartsAt,
+    successorDeletedAt, endsBeforeDate, ...fields }) => {
     const history = (versions ?? []).map((row): RuleVersion => {
       const changes: RuleVersion['changes'] = {};
       if (row.amountMinor !== null) changes.amountMinor = row.amountMinor;
@@ -122,7 +127,7 @@ async function readCalendars(db: Runner, userId: string | undefined, asOf: numbe
     // The replacement ends the old series by date. Keep the structural version out of occurrence parameters.
     return { rule: { ...fields, endsBeforeDate: replacedByRuleId && !replacedBy ? null : endsBeforeDate,
       versions: replacedBy ? history.slice(0, -1) : history }, userId,
-      latestVersion: history.at(-1), replaces, replacedBy,
+      latestVersion: history.at(-1), replaces, replacedBy, predecessorDeletedAt, successorDeletedAt,
       currency, zones: zones ?? [], processedThrough, recoveryHeld: Boolean(recoveryHeld),
       outcomes: new Map((outcomes ?? []).map(({ source, ...outcome }) =>
         [outcome.date, { ...outcome, ...transactionSourceFields(outcome.kind, source) }])),
@@ -133,7 +138,8 @@ async function readCalendars(db: Runner, userId: string | undefined, asOf: numbe
 type StoredCalendar = Awaited<ReturnType<typeof readCalendars>>[number];
 const lastStoredDate = '9999-12-31';
 
-function summarizeRule({ rule, currency, latestVersion, replaces, replacedBy, recoveryHeld }: StoredCalendar): RuleResult {
+function summarizeRule({ rule, currency, latestVersion, replaces, replacedBy, predecessorDeletedAt, successorDeletedAt,
+  recoveryHeld }: StoredCalendar): RuleResult {
   const { settings } = scheduleSettingsAt(rule.versions, Infinity);
   const { amountMinor, categoryId, state, comment = null, source, endDate = null } = settings;
   if (!latestVersion || amountMinor === undefined || categoryId === undefined || state === undefined) {
@@ -142,22 +148,23 @@ function summarizeRule({ rule, currency, latestVersion, replaces, replacedBy, re
   return { ruleId: rule.id, accountId: rule.accountId, currency, kind: rule.kind, frequency: rule.frequency,
     firstDate: rule.firstDate, amountMinor, categoryId, comment, endDate, state: replacedBy ? 'ended' : state,
     ruleVersion: latestVersion.version, effectiveAt: latestVersion.effectiveAt, ...transactionSourceFields(rule.kind, source),
-    ...(replaces && { replaces }), ...(replacedBy && { replacedBy }), ...(recoveryHeld && { recoveryHeld: true as const }) };
+    ...(replaces && predecessorDeletedAt === null && { replaces }), ...(replacedBy && successorDeletedAt === null && { replacedBy }),
+    ...(recoveryHeld && { recoveryHeld: true as const }) };
 }
 
 async function requireScheduleAccount(tx: Tx, userId: string, accountId: string, lock = false) {
   const account = await one<{ archived: number; startDate: string }>(tx, sql`
     SELECT archived, start_date AS startDate FROM accounts
-    WHERE id = ${accountId} AND user_id = ${userId} ${lock ? sql`FOR UPDATE` : sql``}`);
+    WHERE id = ${accountId} AND user_id = ${userId} AND deleted_at IS NULL ${lock ? sql`FOR UPDATE` : sql``}`);
   if (!account) throw new AccessError(404, 'NOT_FOUND');
   if (lock && account.archived) throw new AccessError(409, 'ACCOUNT_UNAVAILABLE');
   return account;
 }
 
-async function requireScheduleRuleAccount(tx: Tx, userId: string, ruleId: string) {
+export async function requireScheduleRuleAccount(tx: Tx, userId: string, ruleId: string, includeDeleted = false) {
   const rule = await one<{ accountId: string }>(tx, sql`
     SELECT r.account_id AS accountId FROM schedule_rules r JOIN accounts a ON a.id = r.account_id
-    WHERE r.id = ${ruleId} AND a.user_id = ${userId}`);
+    WHERE r.id = ${ruleId} AND a.user_id = ${userId} ${includeDeleted ? sql`` : sql`AND r.deleted_at IS NULL`}`);
   if (!rule) throw new AccessError(404, 'NOT_FOUND');
   return rule.accountId;
 }
@@ -395,7 +402,7 @@ export function replaceScheduleRule(withAccess: WithCommandAccess, recoveryVersi
   if (source !== undefined) parameters.push(source);
   return runCommand(withAccess, 'schedule.replace', recoveryVersion, idempotencyKey, [ruleId, accountId], parameters,
     async (tx, userId, now, apply, actorId) => {
-      const sourceAccountId = await requireScheduleRuleAccount(tx, userId, ruleId);
+      const sourceAccountId = await requireScheduleRuleAccount(tx, userId, ruleId, true);
       await requireScheduleAccount(tx, userId, accountId);
       return apply(async () => {
         // Access holds the owner. Acquire account locks in the same order as ledger writes, then lock the source rule.
@@ -440,7 +447,7 @@ export function replaceScheduleRule(withAccess: WithCommandAccess, recoveryVersi
 
 async function lockAccountCalendars(tx: Tx, userId: string, accountId: string, asOf: number) {
   // The caller already holds the owner and account locks. Schedule writes use the same order.
-  await tx.execute(sql`SELECT id FROM schedule_rules WHERE account_id = ${accountId} ORDER BY id FOR UPDATE`);
+  await tx.execute(sql`SELECT id FROM schedule_rules WHERE account_id = ${accountId} AND deleted_at IS NULL ORDER BY id FOR UPDATE`);
   return readCalendars(tx, userId, asOf, sql`r.account_id = ${accountId}`);
 }
 
@@ -502,7 +509,7 @@ async function lockScheduleDate(tx: Tx, candidate: ScheduleCandidate, now: numbe
   const { userId, accountId, ruleId, date } = candidate;
   const rule = await one<{ processedThrough: string | null; recoveryHeld: number }>(tx, sql`
     SELECT processed_through AS processedThrough, recovery_held AS recoveryHeld
-    FROM schedule_rules WHERE id = ${ruleId} AND account_id = ${accountId} FOR UPDATE`);
+    FROM schedule_rules WHERE id = ${ruleId} AND account_id = ${accountId} AND deleted_at IS NULL FOR UPDATE`);
   if (!rule) return;
   const stored = await one<ScheduleOutcome>(tx, sql`SELECT status, transaction_id AS transactionId, reason,
     adjustment_id AS adjustmentId FROM schedule_occurrences WHERE rule_id = ${ruleId} AND scheduled_date = ${date} FOR UPDATE`);
@@ -561,7 +568,7 @@ export function skipScheduleOccurrence(withAccess: WithCommandAccess, recoveryVe
   const expectedFailureRevision = access.role === 'admin' ? access.expectedFailureRevision : undefined;
   return runCommand(withAccess, 'schedule.skip', recoveryVersion, idempotencyKey, [ruleId, date],
     [reason, expectedFailureRevision ?? null], async (tx, userId, now, apply, actorId) => {
-      const accountId = await requireScheduleRuleAccount(tx, userId, ruleId);
+      const accountId = await requireScheduleRuleAccount(tx, userId, ruleId, true);
       return apply(async () => {
         const { next, failure } = await lockUnsettledScheduleDate(tx, { userId, accountId, ruleId, date }, now,
           expectedFailureRevision);

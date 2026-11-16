@@ -120,3 +120,27 @@ export function EditorHeading({ title, onClose, closeHref, children }: { title: 
     {children}
   </section>;
 }
+
+export function ConfirmDeletion({ label, message, lang, disabled, feedback, onConfirm, onCancel }: {
+  label: string; message: string; lang: Language; disabled: boolean; feedback?: ReactNode;
+  onConfirm: (reason: string) => void; onCancel: () => void;
+}) {
+  const t = financeWords[lang];
+  const [reason, setReason] = useState('');
+  const explanation = reason.trim();
+  return <form onSubmit={(event) => {
+    event.preventDefault();
+    if (!disabled && explanation) onConfirm(explanation);
+  }}>
+    {feedback}
+    <fieldset className="finance-fields" disabled={disabled}>
+      <p>{message}</p>
+      <label>{t.reason}<textarea value={reason} maxLength={500} rows={2} required
+        onChange={(event) => setReason(event.target.value)} /></label>
+      <div className="row-actions">
+        <button type="submit" className="destructive" disabled={!explanation}>{label}</button>
+        <button type="button" className="text-button" onClick={onCancel}>{t.cancel}</button>
+      </div>
+    </fieldset>
+  </form>;
+}

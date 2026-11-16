@@ -24,7 +24,8 @@ export async function listAccountHistory(tx: Tx, userId: string, accountId: stri
   // A void version has no movements. Its preceding posted version identifies the affected accounts and amounts.
   const history = await rows<HistoryRow>(tx, sql`
     WITH owned_account AS (
-      SELECT id, currency, start_date, opening_balance_minor FROM accounts WHERE id = ${accountId} AND user_id = ${userId}
+      SELECT id, currency, start_date, opening_balance_minor FROM accounts
+      WHERE id = ${accountId} AND user_id = ${userId} AND deleted_at IS NULL
     ), history_entries AS (
       SELECT a.id, a.start_date AS date, 'opening' AS type, a.opening_balance_minor AS amountMinor,
         NULL AS explanation, NULL AS actorRole, NULL AS transactionVersion, NULL AS status,
@@ -39,6 +40,7 @@ export async function listAccountHistory(tx: Tx, userId: string, accountId: stri
       JOIN transactions t ON t.id = m.transaction_id AND t.user_id = ${userId}
       JOIN transaction_versions v ON v.transaction_id = t.id AND v.version = t.current_version
         AND m.transaction_version = v.version - (v.status = 'void')
+      WHERE t.deleted_at IS NULL
     ), history_page AS (
       SELECT * FROM history_entries
       ${beforeDate ? sql`WHERE date < ${beforeDate} OR (date = ${beforeDate} AND id < ${beforeId})` : sql``}
