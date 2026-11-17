@@ -1,7 +1,8 @@
 const { cp, mkdir, readFile, readdir, rm, writeFile, copyFile } = require('node:fs/promises');
 const { createRequire } = require('node:module');
 const { join } = require('node:path');
-const { IOSConfig, withFinalizedMod } = require('expo/config-plugins');
+const { IOSConfig, withFinalizedMod, withPodfile } = require('expo/config-plugins');
+const { mergeContents } = require('@expo/config-plugins/build/utils/generateCode');
 const plist = require('@expo/plist').default;
 const sharp = createRequire(require.resolve('react-native-bootsplash/package.json'))('sharp');
 
@@ -64,16 +65,16 @@ async function prepareResources({ source, destination, projectRoot, variant, log
   await writeFile(join(destination, 'Supporting', 'ru.lproj', 'InfoPlist.strings'), localizedInfo + '\n');
 }
 
-function buildConfiguration(project, listId, name) {
+function buildConfiguration(project, listId, name, base) {
   const configurations = IOSConfig.XcodeUtils.getBuildConfigurationsForListId(project, listId);
   const existing = configurations.find(([, item]) => IOSConfig.XcodeUtils.unquote(item.name) === name);
   if (existing) return existing[1];
 
-  const [, release] = IOSConfig.XcodeUtils.getBuildConfigurationForListIdAndName(project, {
-    configurationListId: listId, buildConfiguration: 'Release',
+  const [, template] = IOSConfig.XcodeUtils.getBuildConfigurationForListIdAndName(project, {
+    configurationListId: listId, buildConfiguration: base,
   });
   const id = project.generateUuid();
-  const configuration = { isa: release.isa, name, buildSettings: structuredClone(release.buildSettings) };
+  const configuration = { isa: template.isa, name, buildSettings: structuredClone(template.buildSettings) };
   const section = project.pbxXCBuildConfigurationSection();
   section[id] = configuration;
   section[id + '_comment'] = name;
@@ -82,19 +83,23 @@ function buildConfiguration(project, listId, name) {
   return configuration;
 }
 
-function configureProject(project, { target, projectName, variants }) {
+function configureProject(project, { target, projectName, variants, bundleIdentifier }) {
   const projectListId = project.getFirstProject().firstProject.buildConfigurationList;
   const configurations = IOSConfig.XcodeUtils.getBuildConfigurationsForListId(project, projectListId);
   for (const [, configuration] of configurations) {
     configuration.buildSettings[resourceRootSetting] = '"$(SRCROOT)"';
   }
   for (const variant of variants) {
-    const projectConfiguration = buildConfiguration(project, projectListId, variant.configuration);
-    projectConfiguration.buildSettings[resourceRootSetting] =
-      `"$(SRCROOT)/${resourcesDirectory}/${variant.name}"`;
-    const targetConfiguration = buildConfiguration(project, target.buildConfigurationList, variant.configuration);
-    targetConfiguration.buildSettings.INFOPLIST_FILE = `"$(${resourceRootSetting})/${projectName}/Info.plist"`;
-    targetConfiguration.buildSettings.PRODUCT_NAME = variant.name;
+    for (const [mode, configuration] of Object.entries(variant.configurations)) {
+      const projectConfiguration = buildConfiguration(project, projectListId, configuration, mode);
+      projectConfiguration.buildSettings[resourceRootSetting] =
+        `"$(SRCROOT)/${resourcesDirectory}/${variant.name}"`;
+      const targetConfiguration = buildConfiguration(project, target.buildConfigurationList, configuration, mode);
+      const settings = targetConfiguration.buildSettings;
+      settings.INFOPLIST_FILE = `"$(${resourceRootSetting})/${projectName}/Info.plist"`;
+      settings.PRODUCT_NAME = variant.name;
+      settings.PRODUCT_BUNDLE_IDENTIFIER = mode === 'Debug' ? variant.debugBundleIdentifier : bundleIdentifier;
+    }
   }
 
   const brandedPaths = new Set(brandingFiles.map((file) => `${projectName}/${file}`));
@@ -108,25 +113,46 @@ function configureProject(project, { target, projectName, variants }) {
 
 async function writeSchemes(xcodeProject, projectName, targetId, variants) {
   const directory = join(xcodeProject, 'xcshareddata', 'xcschemes');
-  const template = await readFile(join(directory, `${projectName}.xcscheme`), 'utf8');
-  for (const { name, configuration } of variants) {
-    const file = join(directory, `${name}.xcscheme`);
-    const current = await readFile(file, 'utf8').catch((error) => {
-      if (error.code !== 'ENOENT') throw error;
-      return template;
-    });
-    const scheme = current
-      .replace(/<(?:Launch|Profile|Archive)Action\b[^>]*>/g, (action) =>
-        action.replace(/buildConfiguration\s*=\s*"[^"]+"/, `buildConfiguration = "${configuration}"`))
-      .replace(/<BuildableReference\b[^>]*>/g, (reference) =>
-        new RegExp(`BlueprintIdentifier\\s*=\\s*"${targetId}"`).test(reference)
+  const files = new Set(await readdir(directory));
+  const defaultScheme = `${projectName}.xcscheme`;
+  const templateFile = files.has(defaultScheme) ? defaultScheme : `Release ${variants[0].name}.xcscheme`;
+  const template = await readFile(join(directory, templateFile), 'utf8');
+  const appTarget = new RegExp(`BlueprintIdentifier\\s*=\\s*"${targetId}"`);
+  for (const { name, configurations } of variants) {
+    const legacyFile = `${name}.xcscheme`;
+    const legacyScheme = files.has(legacyFile) ? await readFile(join(directory, legacyFile), 'utf8') : template;
+    for (const [mode, configuration] of Object.entries(configurations)) {
+      const file = `${mode} ${name}.xcscheme`;
+      const current = files.has(file) ? await readFile(join(directory, file), 'utf8') : legacyScheme;
+      const scheme = current
+        .replace(/<(?:Test|Launch|Profile|Analyze|Archive)Action\b[^>]*>/g, (action) =>
+          action.replace(/buildConfiguration\s*=\s*"[^"]+"/, `buildConfiguration = "${configuration}"`))
+        .replace(/<BuildableReference\b[^>]*>/g, (reference) => appTarget.test(reference)
           ? reference.replace(/BuildableName\s*=\s*"[^"]+"/, `BuildableName = "${name}.app"`)
           : reference);
-    await writeFile(file, scheme);
+      await writeFile(join(directory, file), scheme);
+    }
+  }
+  for (const legacyFile of new Set([defaultScheme, ...variants.map(({ name }) => `${name}.xcscheme`)])) {
+    await rm(join(directory, legacyFile), { force: true });
   }
 }
 
-module.exports = function withIosSchemes(config, { variants, logoWidth }) {
+module.exports = function withIosSchemes(config, { variants, logoWidth, bundleIdentifier }) {
+  config = withPodfile(config, (config) => {
+    const configurations = variants.flatMap(({ configurations }) => Object.entries(configurations));
+    const mappings = [['Debug', 'Debug'], ['Release', 'Release'], ...configurations]
+      .map(([mode, name]) => `  '${name}' => :${mode.toLowerCase()}`);
+    config.modResults.contents = mergeContents({
+      tag: 'teta-build-configurations',
+      src: config.modResults.contents,
+      newSrc: `project '${config.modRequest.projectName}',\n${mappings.join(',\n')}`,
+      anchor: /^target /,
+      offset: 0,
+      comment: '#',
+    }).contents;
+    return config;
+  });
   return withFinalizedMod(config, ['ios', async (config) => {
     const { projectRoot, platformProjectRoot, projectName } = config.modRequest;
     const project = IOSConfig.XcodeUtils.getPbxproj(projectRoot);
@@ -136,7 +162,7 @@ module.exports = function withIosSchemes(config, { variants, logoWidth }) {
       destination: join(platformProjectRoot, resourcesDirectory, variant.name, projectName),
       projectRoot, variant, logoWidth,
     })));
-    configureProject(project, { target, projectName, variants });
+    configureProject(project, { target, projectName, variants, bundleIdentifier });
     await writeFile(project.filepath, project.writeSync());
     await writeSchemes(IOSConfig.Paths.getXcodeProjectPath(projectRoot), projectName, uuid, variants);
     return config;

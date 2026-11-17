@@ -6,6 +6,7 @@ import { sql } from 'drizzle-orm';
 import type { LightMyRequestResponse } from 'fastify';
 import { routes } from '@teta/contracts';
 import type { Body, ErrorCode, Result, Route } from '@teta/contracts';
+import { renderAccountStatement } from '../src/account-statement-pdf.ts';
 import { buildApp } from '../src/app.ts';
 import { configFromEnv } from '../src/config.ts';
 import { base32, token, verifier } from '../src/crypto.ts';
@@ -28,7 +29,7 @@ test('Finance API against migrated MySQL', async (t) => {
   t.after(async () => { await Promise.all([connection.pool.end(), reader.pool.end()]); });
   const config = configFromEnv({
     DATABASE_URL: databaseUrl, API_ORIGIN: 'https://192.0.2.2:18443', ADMIN_ORIGIN: 'https://192.0.2.2:18444',
-    ACCESS_KEY: token(), TOTP_KEY: token(), PROXY_IP: '192.0.2.1', RECOVERY_VERSION: '1',
+    ACCESS_KEY: token(), TOTP_KEY: token(), PROFILE_KEYS: '1:' + token(), PROXY_IP: '192.0.2.1', RECOVERY_VERSION: '1',
   });
   let now = Date.parse('2027-01-31T16:00:00Z'); // Midnight on February 1 in Makassar.
   const app = buildApp(config, db, () => now);
@@ -3629,7 +3630,7 @@ test('Finance API against migrated MySQL', async (t) => {
       assert.equal(response.statusCode, 200, response.body);
       return response.json<SingleAccountResult>();
     }
-    function download(bearer: string | undefined, account = accountId, filters = query) {
+    function download(bearer: string | undefined, account = accountId, filters: Record<string, string> = query) {
       return send(app, 'getAccountStatement', undefined, bearer, account, undefined, new URLSearchParams(filters));
     }
     const read = (filters = query, account = accountId) =>
@@ -3674,13 +3675,51 @@ test('Finance API against migrated MySQL', async (t) => {
     const empty = await read({ ...query, fromDate: '2027-02-02', throughDate: '2027-02-02' });
     assert.deepEqual([empty.openingMinor, empty.closingMinor, empty.entries], ['110000', '110000', []]);
 
-    const response = await download(session);
+    const response = await download(session, accountId, { ...query, lang: 'en' });
     assert.equal(response.statusCode, 200);
     assert.equal(response.headers['content-type'], 'application/pdf');
     assert.equal(response.headers['content-disposition'], 'attachment; filename="statement-2027-02-01-2027-02-28.pdf"');
     assert.equal(response.headers['cache-control'], 'no-store');
     assert.equal(response.rawPayload.subarray(0, 5).toString(), '%PDF-');
+    assert.ok(response.rawPayload.includes('(TetaFinance)'));
+    const coma = await download(session, accountId, { ...query, variant: 'b' });
+    assert.equal(coma.statusCode, 200);
+    assert.ok(coma.rawPayload.includes('(ComaBank)'));
+
+    const profile = await send(app, 'getPersonalProfile', undefined, session);
+    assert.equal(profile.statusCode, 200, profile.body);
+    const { version, fields } = profile.json<Result<'getPersonalProfile'>>();
+    const fullProfile = { ...fields, lastName: 'Тестова', firstName: 'Анна', patronymic: 'Примеровна', birthDate: '1990-02-01',
+      passportSeries: '0012', passportNumber: '003456', registrationAddress: 'Тестовый адрес' };
+    const updated = await send(app, 'savePersonalProfile', {
+      expectedVersion: version, fields: fullProfile,
+    }, session);
+    assert.equal(updated.statusCode, 200, updated.body);
+    const personalized = await download(session, accountId, { ...query, variant: 'b' });
+    assert.equal(personalized.statusCode, 200);
+    assert.ok(!personalized.rawPayload.equals(coma.rawPayload), 'The full name should change the PDF');
+    const expected = await renderAccountStatement({ ...statement, holderName: 'Тестова Анна Примеровна' }, 'b');
+    assert.ok(personalized.rawPayload.equals(expected), 'The PDF should contain the saved full name in profile order');
+    expectError(await download(session, accountId, { ...query, variant: 'unknown' }), 400, 'INVALID_REQUEST');
     expectError(await download(other.session), 404, 'NOT_FOUND');
+
+    const trimmed = await send(app, 'savePersonalProfile', {
+      expectedVersion: updated.json<Result<'savePersonalProfile'>>().version, fields: { ...fullProfile, firstName: null },
+    }, session);
+    assert.equal(trimmed.statusCode, 200, trimmed.body);
+    const partial = await download(session, accountId, { ...query, variant: 'b' });
+    assert.equal(partial.statusCode, 200);
+    const partialExpected = await renderAccountStatement({ ...statement, holderName: 'Тестова Примеровна' }, 'b');
+    assert.ok(partial.rawPayload.equals(partialExpected), 'The PDF should contain the available parts of the name');
+
+    const cleared = await send(app, 'savePersonalProfile', {
+      expectedVersion: trimmed.json<Result<'savePersonalProfile'>>().version,
+      fields: { ...fullProfile, lastName: null, firstName: null, patronymic: null },
+    }, session);
+    assert.equal(cleared.statusCode, 200, cleared.body);
+    const withoutName = await download(session, accountId, { ...query, variant: 'b' });
+    assert.equal(withoutName.statusCode, 200);
+    assert.ok(withoutName.rawPayload.equals(coma.rawPayload), 'The PDF should omit the holder row when all name fields are empty');
     expectError(await download(session, randomUUID()), 404, 'NOT_FOUND');
     expectError(await download(undefined), 401, 'SESSION_EXPIRED');
     expectError(await download(session, accountId, { ...query, fromDate: '2026-12-31' }), 400, 'INVALID_REQUEST');

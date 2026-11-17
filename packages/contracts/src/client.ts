@@ -1,7 +1,13 @@
 export const cardNetworks = ['visa', 'mastercard', 'mir', 'unionpay'] as const;
 export type CardNetwork = typeof cardNetworks[number];
-export const supportVariants = ['a', 'b'] as const;
-export type SupportVariant = typeof supportVariants[number];
+export const appVariantIds = ['a', 'b'] as const;
+export type AppVariant = typeof appVariantIds[number];
+export const appVariants = {
+  a: { name: { en: 'TetaFinance', ru: 'TэтаФинанс' }, brandColor: '#2459B2' },
+  b: { name: { en: 'ComaBank', ru: 'ComaBank' }, brandColor: '#C497FF' },
+} as const satisfies Record<AppVariant, { name: { en: string; ru: string }; brandColor: string }>;
+export const supportVariants = appVariantIds;
+export type SupportVariant = AppVariant;
 export const avatarMaxPixels = 512;
 export const avatarMaxBytes = 160 * 1024;
 

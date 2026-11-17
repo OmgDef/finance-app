@@ -1,6 +1,6 @@
 import { Type as T } from '@sinclair/typebox';
 import type { Static, TSchema } from '@sinclair/typebox';
-import { avatarMaxBytes, cardNetworks, endpoints, supportVariants } from './client.ts';
+import { appVariantIds, avatarMaxBytes, cardNetworks, endpoints } from './client.ts';
 export { avatarMaxBytes, avatarMaxPixels } from './client.ts';
 export type { CardNetwork, SupportVariant } from './client.ts';
 
@@ -106,7 +106,10 @@ const depositInterestResult = T.Object({
   accountId: id, accountVersion: ledgerVersion, currency, balanceMinor, settledPeriods: T.Integer({ minimum: 1 }),
 }, { additionalProperties: false });
 const accountParams = T.Object({ accountId: id });
-const accountStatementQuery = T.Object({ fromDate: financialDate, throughDate: financialDate, lang: language },
+const appVariantFields = { variant: T.Optional(T.Union(appVariantIds.map((variant) => T.Literal(variant)), {
+  default: 'a', description: 'App variant. a is TetaFinance and b is ComaBank.',
+})) };
+const accountStatementQuery = T.Object({ fromDate: financialDate, throughDate: financialDate, lang: language, ...appVariantFields },
   { additionalProperties: false });
 const adminAccountParams = T.Object({ userId: id, accountId: id });
 const transactionSource = T.String({ maxLength: 120, pattern: '\\S', description: 'Payer, merchant, or recipient.' });
@@ -395,10 +398,7 @@ const publicContacts = {
   email: T.Union([email, T.Null()]),
   phone: T.Union([T.String({ maxLength: 32 }), T.Null()]),
 };
-const supportVariantFields = { variant: T.Optional(T.Union(supportVariants.map((variant) => T.Literal(variant)), {
-  default: 'a', description: 'App variant. a is TetaFinance and b is ComaBank.',
-})) };
-const supportVariantQuery = T.Object(supportVariantFields);
+const supportVariantQuery = T.Object(appVariantFields);
 const invalidSupportVariant = 'INVALID_REQUEST for an unknown app variant.';
 const supportContacts = T.Object({ ...publicContacts, version: ledgerVersion });
 const supportContactInput = T.Object({
@@ -595,7 +595,7 @@ export const routes = {
     ...route(endpoints.support, 'public', 'Read published support contacts and FAQ', empty,
       T.Object({ ...publicContacts,
         faq: T.Array(T.Object({ id: T.String(), question: T.String(), answer: T.String() })) })),
-    query: T.Object({ ...supportVariantFields, lang: T.Optional(language) }),
+    query: T.Object({ ...appVariantFields, lang: T.Optional(language) }),
     description: 'Available before sign-in. Contacts and complete, published FAQ entries belong to the selected app variant. Unconfigured contacts are null. Entries are ordered by position and stable ID. The default variant is a and the default language is English.',
     failures: { 400: 'INVALID_REQUEST for an unknown app variant or language.' },
   },
@@ -712,12 +712,12 @@ export const routes = {
     ...route(endpoints.getAccountStatement, 'mobile', 'Download an account statement as a PDF', empty,
       T.String({ format: 'binary' })),
     contentType: 'application/pdf', params: accountParams, query: accountStatementQuery,
-    description: 'Includes the current posted movements and balance adjustments of the owned account across both inclusive dates. Dates must be between the opening date and today in the profile time zone. Archived accounts are supported.',
+    description: 'Includes the current posted movements and balance adjustments of the owned account across both inclusive dates. The account owner’s saved surname, first name, and patronymic appear on a single line when provided. Dates must be between the opening date and today in the profile time zone. Archived accounts are supported. The app variant selects the PDF branding.',
     failures: {
       ...accountNotFound,
-      400: 'INVALID_REQUEST for an invalid date or range.',
+      400: 'INVALID_REQUEST for an invalid date, range, or app variant.',
       422: 'STATEMENT_TOO_LARGE when the range exceeds the statement row limit. Request a shorter range.',
-      503: 'TEMPORARY_FAILURE when the server is at capacity for statement requests. Retry after the indicated delay.',
+      503: 'TEMPORARY_FAILURE when the server is at capacity for statement requests. Retry after the indicated delay. PROFILE_UNAVAILABLE when the encryption key for the saved profile is unavailable.',
     },
   },
   listCategories: {
@@ -933,7 +933,7 @@ export const routes = {
   adminDeleteFaq: {
     ...route(endpoints.adminDeleteFaq, 'admin', 'Delete an existing FAQ entry', empty, ok),
     params: faqParams,
-    query: T.Object({ ...supportVariantFields, expectedVersion: T.String({ pattern: '^[1-9]\\d{0,9}$' }) }, { additionalProperties: false }),
+    query: T.Object({ ...appVariantFields, expectedVersion: T.String({ pattern: '^[1-9]\\d{0,9}$' }) }, { additionalProperties: false }),
     failures: { 400: 'INVALID_REQUEST for an unknown app variant or invalid entry version.', ...faqVersionFailures },
   },
   listUsers: {

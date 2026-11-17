@@ -5,6 +5,7 @@ import { requireOptionalNativeModule } from 'expo';
 import { randomUUID } from 'expo-crypto';
 import type { Directory, File } from 'expo-file-system';
 import { requestAccountStatement } from './api';
+import { appVariant } from './app-variant';
 import { apiErrorCode } from './finance-commands';
 import type { FinanceAccess } from './finance-commands';
 import { FinanceDateField } from './finance-date-field';
@@ -133,7 +134,8 @@ export function AccountStatementForm({ account, access, lang, focused }: {
       const fileSystem = await import('expo-file-system');
       if (!current()) return;
       purgeStatements(fileSystem);
-      const bytes = await requestAccountStatement(account.accountId, { fromDate, throughDate, lang }, access.token, controller.signal);
+      const bytes = await requestAccountStatement(account.accountId, { fromDate, throughDate, lang, variant: appVariant },
+        access.token, controller.signal);
       if (!current()) return;
       const { Directory, File, Paths } = fileSystem;
       directory = new Directory(Paths.cache, 'account-statements', `${Date.now()}-${randomUUID()}`);

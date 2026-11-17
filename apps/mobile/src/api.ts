@@ -1,10 +1,12 @@
+import Constants from 'expo-constants';
 import { endpoints } from '@teta/contracts/client';
 import type { AccountStatementQuery, Body, Params, Result, Route } from '@teta/contracts';
 
 export class ApiError extends Error {
   constructor(code: string) { super(code); }
 }
-const configuredOrigin = process.env.EXPO_PUBLIC_API_ORIGIN;
+const embeddedOrigin = Constants.expoConfig?.extra?.apiOrigin;
+const configuredOrigin = typeof embeddedOrigin === 'string' ? embeddedOrigin : process.env.EXPO_PUBLIC_API_ORIGIN;
 const origin = (() => {
   if (!configuredOrigin) return undefined;
   const url = new URL(configuredOrigin);

@@ -183,9 +183,13 @@ export function buildApp(config: Config, db: Db, clock = Date.now, logger = fals
     statementsInFlight++;
     try {
       const query = request.query as AccountStatementQuery;
-      const statement = await mobile.withSession(session, (tx, user, _device, now) =>
-        readAccountStatement(tx, user.id, request.params.accountId, now, query));
-      const pdf = await renderAccountStatement(statement);
+      const statement = await mobile.withSession(session, async (tx, user, _device, now) => {
+        const ledger = await readAccountStatement(tx, user.id, request.params.accountId, now, query);
+        const { fields } = await readPersonalProfile(tx, user.id, config.profileKeys);
+        const holderName = [fields.lastName, fields.firstName, fields.patronymic].filter(Boolean).join(' ');
+        return { ...ledger, holderName };
+      });
+      const pdf = await renderAccountStatement(statement, query.variant);
       return reply.type(routes.getAccountStatement.contentType)
         .header('Content-Disposition', `attachment; filename="statement-${query.fromDate}-${query.throughDate}.pdf"`)
         .send(pdf);

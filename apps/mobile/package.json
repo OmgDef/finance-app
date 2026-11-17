@@ -5,7 +5,7 @@
   "main": "expo-router/entry",
   "scripts": {
     "start": "node scripts/expo.cjs start --dev-client",
-    "ios": "node scripts/expo.cjs run:ios"
+    "ios": "node scripts/expo.cjs run:ios --scheme 'Debug TetaFinance' --configuration DebugTetaFinance"
   },
   "dependencies": {
     "@react-native-community/datetimepicker": "9.2.1",
