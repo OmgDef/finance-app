@@ -326,7 +326,6 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
   const [refreshing, setRefreshing] = useState(false);
   const [afterSave, setAfterSave] = useState<{ page: FinancePage; replace?: boolean; dismissTo?: boolean }>();
   const [scheduleRefresh, setScheduleRefresh] = useState(0);
-  const [paymentsRefresh, setPaymentsRefresh] = useState(0);
   const t = financeCopy[lang];
   const s = scheduleCopy[lang];
   const focused = useIsFocused();
@@ -463,7 +462,6 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
     }
     if (transactionId) void transaction.load();
     if (page.name === 'schedule') setScheduleRefresh((signal) => signal + 1);
-    if (page.name === 'payments') setPaymentsRefresh((signal) => signal + 1);
     if (page.name === 'statistics') statistics.refresh();
   }
 
@@ -730,8 +728,7 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
           <FinanceAlert>{localizedError(categoryError, lang)}</FinanceAlert>
           <FinanceButton title={copy[lang].retry} onPress={() => void loadCategories()} />
         </View>}
-        <PaymentsScreen access={access} lang={lang} accountCount={activeAccounts.length}
-          categories={categories} blocked={blocked} focused={focused} refreshSignal={paymentsRefresh}
+        <PaymentsScreen lang={lang} accountCount={activeAccounts.length} categories={categories} blocked={blocked}
           onRecord={(kind, categoryId) => go({ name: 'record', kind, accountId: null, categoryId })} />
       </>}
       {page.name === 'schedule' && <>
