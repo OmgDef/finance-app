@@ -2,9 +2,12 @@ import { useMemo } from 'react';
 import { ActivityIndicator, Pressable, SectionList, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Language, Result } from '@teta/contracts';
+import { isComaBank } from './app-variant';
+import { ComaBankCard } from './comabank-card';
 import { AccountBalancePlot, AccountMonthlyFlow } from './finance-account-charts';
 import { cashFlowSeries } from './finance-cash-flow';
 import { financeCopy } from './finance-copy';
+import { depositInterestCopy } from './finance-deposit-interest';
 import { formatFinancialDate, formatMoney } from './finance-format';
 import { CardNetworkLogo, cardNetworkLabel } from './finance-card-network';
 import { FinanceIcon } from './finance-icon';
@@ -19,11 +22,13 @@ type BalanceSeries = Result<'getAccountBalanceSeries'>;
 type LinkedCard = Result<'listAccountCards'>['cards'][number];
 type MonthSection = { key: string; title: string; data: Entry[] };
 
-export function AccountOverview({ account, depositTerms, lang, categories, month, balanceSeries, balanceSeriesError,
+export function AccountOverview({ account, depositTerms, interestSummary, onInterest, lang, categories, month, balanceSeries, balanceSeriesError,
   cards, cardsError, monthlyActivity, totalsError, history, historyBusy, historyError, accountError, refreshing, created,
   onRefresh, onMore, onTransaction, onOpenCard, onReloadCards, statementTitle, onStatement }: {
   account?: Account;
   depositTerms: string;
+  interestSummary?: string;
+  onInterest?: () => void;
   lang: Language;
   categories?: Category[];
   month: string;
@@ -76,7 +81,35 @@ export function AccountOverview({ account, depositTerms, lang, categories, month
     label: s[label], color, amount: formatMoney(amounts?.[field] ?? '0', account.currency, lang),
   }));
   const stackMetrics = Math.min(width, 540) / fontScale < 330 || !!metrics?.some(({ amount }) => amount.length > 18);
+  const narrow = (Math.min(width, styles.page.maxWidth) - styles.page.paddingHorizontal * 2) / fontScale < 276;
   const onlyOpening = history && !history.next && history.entries.every(({ type }) => type === 'opening');
+  const analysis = account && <>
+    <View style={[styles.surface, layout.summary]}>
+      <Text accessibilityRole="header" style={styles.groupTitle}>{t.balanceTrend}</Text>
+      {series && <AccountBalancePlot series={series} lang={lang} />}
+      {!series && !balanceSeriesError && !balanceSeries &&
+        <ActivityIndicator color={palette.accent} accessibilityLabel={t.loading} style={layout.loading} />}
+      {(balanceSeriesError || (balanceSeries && !series)) && <FinanceAlert>{t.balanceTrendError}</FinanceAlert>}
+    </View>
+    <View style={[styles.surface, layout.summary]}>
+      <Text accessibilityRole="header" style={styles.groupTitle}>
+        {t.monthlyActivity} · {monthFormat.format(new Date(month + '-01T00:00:00Z'))}
+      </Text>
+      {metrics && <View style={stackMetrics ? layout.metricsStack : layout.metrics}>
+        {metrics.map(({ label, amount, color }) => <View key={label} style={layout.metric}>
+          <View style={layout.legend}>
+            <View style={[layout.swatch, { backgroundColor: color }]} />
+            <Text style={styles.meta}>{label}</Text>
+          </View>
+          <Text style={styles.value}>{amount}</Text>
+        </View>)}
+      </View>}
+      {monthlyActivity && <AccountMonthlyFlow key={monthlyActivity.fromDate} report={monthlyActivity}
+        currency={account.currency} lang={lang} />}
+      {!monthlyActivity && !totalsError && <ActivityIndicator color={palette.accent} accessibilityLabel={t.loading} style={layout.loading} />}
+      {totalsError && <FinanceAlert>{t.monthlyActivityError}</FinanceAlert>}
+    </View>
+  </>;
 
   return <SectionList<Entry, MonthSection>
     sections={sections}
@@ -88,35 +121,47 @@ export function AccountOverview({ account, depositTerms, lang, categories, month
     keyExtractor={({ type, id }) => type + ':' + id}
     ListHeaderComponent={<View style={layout.header}>
       {account && <>
-        <View style={layout.balance}>
-          <Text accessibilityRole="header" style={layout.balanceLabel}>{t.accountBalance}</Text>
-          <Text style={layout.balanceAmount} numberOfLines={1} adjustsFontSizeToFit
-            accessibilityLiveRegion="polite" testID="finance-detail-balance">{balance}</Text>
+        <View style={[layout.balance, isComaBank && layout.comabankBalance]}>
+          <View style={[layout.balanceFields, isComaBank && !narrow && balance.length <= 17 && layout.balanceRow]}>
+            <Text accessibilityRole="header" style={layout.balanceLabel}>{t.accountBalance}</Text>
+            <Text style={[layout.balanceAmount, isComaBank && layout.comabankBalanceAmount]} numberOfLines={1} adjustsFontSizeToFit
+              accessibilityLiveRegion="polite" testID="finance-detail-balance">{balance}</Text>
+          </View>
           <Text style={layout.balanceMeta}>
             {t['type' in account ? account.type : 'regular']} · {formatFinancialDate(account.startDate, lang)}
           </Text>
           {!!depositTerms && <Text style={layout.balanceMeta}>{depositTerms}</Text>}
+          {onInterest && interestSummary && <Text style={layout.balanceMeta}>{interestSummary}</Text>}
           {account.archived && <Text style={layout.balanceMeta}>{t.archivedAccount}</Text>}
           {account.needsReconciliation && <FinanceAlert style={layout.balanceAlert}>{t.needsReconciliation}</FinanceAlert>}
           {created && <Text style={layout.balanceMeta} testID="finance-receipt" accessibilityLiveRegion="polite">{t.accountCreated}</Text>}
         </View>
-        <FinanceButton title={statementTitle} testID="finance-detail-statement" onPress={onStatement} />
-        {(!!cards?.length || cardsError) && <View style={layout.cardSection}>
-          <Text accessibilityRole="header" style={styles.section} testID="finance-detail-cards">{t.cards}</Text>
-          {!!cards?.length && <View style={styles.surface}>
-            {cards.map(({ cardId, name, lastFour, network }, index) => (
-              <Pressable key={cardId} accessibilityRole="button" testID={'finance-detail-card-' + cardId}
+        {onInterest && <FinanceButton title={depositInterestCopy[lang].title} onPress={onInterest}
+          testID="finance-detail-interest" />}
+        {!isComaBank && <FinanceButton title={statementTitle} testID="finance-detail-statement" onPress={onStatement} />}
+        {(!!cards?.length || cardsError) && <View style={[layout.cardSection, isComaBank && layout.comabankCardSection]}>
+          <Text accessibilityRole="header" style={styles.section} testID="finance-detail-cards">
+            {isComaBank ? t.linkedCards : t.cards}
+          </Text>
+          {!!cards?.length && <View style={isComaBank ? layout.cardTiles : styles.surface}>
+            {cards.map((card, index) => {
+              const { cardId, name, lastFour, network } = card;
+              return <Pressable key={cardId} accessibilityRole="button" testID={'finance-detail-card-' + cardId}
                 accessibilityLabel={[name, cardNetworkLabel(network, lang), lastFour].filter(Boolean).join(', ')}
-                onPress={() => onOpenCard(cardId)}
-                style={({ pressed }) => [layout.linkedCard, index < cards.length - 1 && layout.divider, pressed && styles.dimmed]}>
-                <CardNetworkLogo network={network} />
-                <View style={layout.cardIdentity}>
-                  <Text style={styles.title}>{name}</Text>
-                  {lastFour && <Text style={layout.cardDigits}>{'•••• ' + lastFour}</Text>}
-                </View>
-                <FinanceIcon name="chevron" color={palette.muted} size={14} />
-              </Pressable>
-            ))}
+                onPress={() => onOpenCard(cardId)} style={({ pressed }) => [
+                  isComaBank ? (narrow ? layout.wideTile : layout.cardTile) : layout.linkedCard,
+                  !isComaBank && index < cards.length - 1 && layout.divider, pressed && styles.dimmed,
+                ]}>
+                {isComaBank ? <ComaBankCard card={card} lang={lang} /> : <>
+                  <CardNetworkLogo network={network} />
+                  <View style={layout.cardIdentity}>
+                    <Text style={styles.title}>{name}</Text>
+                    {lastFour && <Text style={layout.cardDigits}>{'•••• ' + lastFour}</Text>}
+                  </View>
+                  <FinanceIcon name="chevron" color={palette.muted} size={14} />
+                </>}
+              </Pressable>;
+            })}
           </View>}
           {cardsError && <View style={[styles.surface, layout.cardLoadError]}>
             <FinanceAlert>{t.cardsLoadError}</FinanceAlert>
@@ -125,31 +170,7 @@ export function AccountOverview({ account, depositTerms, lang, categories, month
             </View>
           </View>}
         </View>}
-        <View style={[styles.surface, layout.summary]}>
-          <Text accessibilityRole="header" style={styles.groupTitle}>{t.balanceTrend}</Text>
-          {series && <AccountBalancePlot series={series} lang={lang} />}
-          {!series && !balanceSeriesError && !balanceSeries &&
-            <ActivityIndicator color={palette.accent} accessibilityLabel={t.loading} style={layout.loading} />}
-          {(balanceSeriesError || (balanceSeries && !series)) && <FinanceAlert>{t.balanceTrendError}</FinanceAlert>}
-        </View>
-        <View style={[styles.surface, layout.summary]}>
-          <Text accessibilityRole="header" style={styles.groupTitle}>
-            {t.monthlyActivity} · {monthFormat.format(new Date(month + '-01T00:00:00Z'))}
-          </Text>
-          {metrics && <View style={stackMetrics ? layout.metricsStack : layout.metrics}>
-            {metrics.map(({ label, amount, color }) => <View key={label} style={layout.metric}>
-              <View style={layout.legend}>
-                <View style={[layout.swatch, { backgroundColor: color }]} />
-                <Text style={styles.meta}>{label}</Text>
-              </View>
-              <Text style={styles.value}>{amount}</Text>
-            </View>)}
-          </View>}
-          {monthlyActivity && <AccountMonthlyFlow key={monthlyActivity.fromDate} report={monthlyActivity}
-            currency={account.currency} lang={lang} />}
-          {!monthlyActivity && !totalsError && <ActivityIndicator color={palette.accent} accessibilityLabel={t.loading} style={layout.loading} />}
-          {totalsError && <FinanceAlert>{t.monthlyActivityError}</FinanceAlert>}
-        </View>
+        {!isComaBank && analysis}
       </>}
       {!!accountError && <FinanceAlert>{accountError}</FinanceAlert>}
       <Text accessibilityRole="header" style={styles.section} testID="finance-history">{t.history}</Text>
@@ -171,6 +192,7 @@ export function AccountOverview({ account, depositTerms, lang, categories, month
           <Text style={styles.title}>{source ?? title}</Text>
           {source && <Text style={styles.meta}>{title}</Text>}
           {!!details && <Text style={styles.meta}>{details}</Text>}
+          {isTransaction && item.automaticInterest && <Text style={styles.meta}>{depositInterestCopy[lang].automatic}</Text>}
           {isVoided && <Text style={styles.meta}>{t.void}</Text>}
           {'actorRole' in item && item.actorRole === 'admin' && <Text style={styles.meta}>{t.changedByAdmin}</Text>}
         </View>
@@ -179,7 +201,8 @@ export function AccountOverview({ account, depositTerms, lang, categories, month
           {history && formatMoney(item.amountMinor, history.currency, lang, item.type !== 'opening')}
         </Text>
       </View>;
-      return <View style={[layout.item, isFirst && layout.first, isLast ? layout.last : layout.divider]}>
+      return <View style={[!isComaBank && layout.item, !isComaBank && isFirst && layout.first,
+        isLast ? !isComaBank && layout.last : layout.divider]}>
         {!!date && <Text style={layout.date}>{date}</Text>}
         {isTransaction
           ? <Pressable accessibilityRole="button" testID={'finance-transaction-' + item.id}
@@ -187,9 +210,13 @@ export function AccountOverview({ account, depositTerms, lang, categories, month
           : row}
       </View>;
     }}
-    ListFooterComponent={historyBusy || historyError ? <View style={layout.footer}>
+    ListFooterComponent={isComaBank || historyBusy || historyError ? <View style={[layout.footer, isComaBank && layout.comabankFooter]}>
       {historyBusy && <ActivityIndicator color={palette.accent} accessibilityLabel={t.loading} />}
       {historyError && <FinanceAlert>{t.historyLoadError}</FinanceAlert>}
+      {isComaBank && <>
+        {history?.next && !historyError && <FinanceButton title={t.loadMore} onPress={onMore} disabled={historyBusy} />}
+        {analysis}
+      </>}
     </View> : undefined}
   />;
 }
@@ -198,12 +225,20 @@ const layout = StyleSheet.create({
   content: { ...styles.page, gap: 0 },
   header: { gap: 14 },
   balance: { backgroundColor: palette.balanceSurface, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12, gap: 4 },
+  comabankBalance: { padding: 14, gap: 8, borderRadius: 14 },
+  balanceFields: { gap: 4 },
+  balanceRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 9 },
   balanceLabel: { ...styles.groupTitle, color: palette.balanceMuted },
   balanceAmount: { ...styles.heroValue, color: palette.panel, fontSize: 40, fontWeight: '700', letterSpacing: -0.8,
     maxWidth: '100%', flexShrink: 1 },
+  comabankBalanceAmount: { color: palette.ink, fontSize: 31 },
   balanceMeta: { ...styles.meta, color: palette.balanceMuted },
   balanceAlert: { color: '#FFB4BB' },
   cardSection: { gap: 4 },
+  comabankCardSection: { gap: 8 },
+  cardTiles: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 10 },
+  cardTile: { width: '48.8%' },
+  wideTile: { width: '100%' },
   linkedCard: { flexDirection: 'row', alignItems: 'center', minHeight: 54, gap: 10, paddingHorizontal: 12, paddingVertical: 8 },
   cardIdentity: { flex: 1, gap: 2 },
   cardDigits: { ...styles.meta, fontVariant: ['tabular-nums'] },
@@ -228,4 +263,5 @@ const layout = StyleSheet.create({
   amount: { color: palette.ink, fontSize: 15, fontWeight: '600', fontVariant: ['tabular-nums'], textAlign: 'right',
     marginLeft: 'auto', flexShrink: 1 },
   footer: { paddingVertical: 10 },
+  comabankFooter: { gap: 14 },
 });

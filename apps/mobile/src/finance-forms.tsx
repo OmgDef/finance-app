@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { KeyboardController } from 'react-native-keyboard-controller';
 import type { Language, Result } from '@teta/contracts';
+import { isComaBank } from './app-variant';
 import type { FinanceDraft, TransactionFields } from './finance-commands';
 import { financeCopy } from './finance-copy';
 import type { FinanceCopyKey } from './finance-copy';
@@ -188,7 +189,7 @@ export function TransactionForm({ lang, today, disabled, onSubmit, accounts, cat
       <View style={styles.amountGroup}>
         <Text style={uiStyles.label}>{t.amount}</Text>
         <View style={[uiStyles.surface, styles.amountBox, amountError && styles.amountError]}>
-          <TextInput editable={!disabled} keyboardType="decimal-pad"
+          <TextInput editable={!disabled} keyboardType="decimal-pad" keyboardAppearance={isComaBank ? 'dark' : undefined}
             style={[styles.amountText, styles.amountInput]} value={amount.text} onChangeText={(value) => {
               amount.setText(value);
               if (amountError) setError(undefined);

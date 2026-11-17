@@ -341,6 +341,62 @@ test('Access API against migrated MySQL', async (t) => {
     }
   });
 
+  await t.test('Support variants have independent contacts and FAQ reads and writes', async () => {
+    const variantB = { query: '?variant=b' };
+    const publicA = await send('support', undefined, { cookie: '' });
+    const explicitA = await send('support', undefined, { cookie: '', query: '?variant=a' });
+    const publicB = await send('support', undefined, { cookie: '', query: '?variant=b&lang=ru' });
+    expect(publicA, 200);
+    expect(explicitA, 200);
+    expect(publicB, 200);
+    assert.deepEqual(publicA.data(), explicitA.data());
+    assert.ok(publicB.data().faq.some(({ id, question }) => id === 'comabank-access' && question === 'Как активировать ComaBank?'));
+    assert.ok(!publicB.data().faq.some(({ id }) => id === 'access'));
+    assert.ok(!publicA.data().faq.some(({ id }) => id === 'comabank-access'));
+    expect(await send('support', undefined, { query: '?variant=c' }), 400, 'INVALID_REQUEST');
+    expect(await send('adminGetSupport', undefined, { query: '?variant=c' }), 400, 'INVALID_REQUEST');
+
+    const adminA = await send('adminGetSupport');
+    const adminB = await send('adminGetSupport', undefined, variantB);
+    expect(adminA, 200);
+    expect(adminB, 200);
+    const before = adminB.data().contacts;
+    let faqId: string | undefined;
+    try {
+      const contacts = { email: 'comabank-support@example.test', phone: '+1 (202) 555-0142', expectedVersion: before.version };
+      const saved = await send('adminUpdateSupportContacts', contacts, variantB);
+      expect(saved, 200);
+      assert.deepEqual(saved.data(), { email: contacts.email, phone: contacts.phone, version: before.version + 1 });
+      expect(await send('adminUpdateSupportContacts', contacts, variantB), 409, 'VERSION_CONFLICT');
+      const visible = await send('support', undefined, variantB);
+      expect(visible, 200);
+      assert.equal(visible.data().email, contacts.email);
+      assert.equal(visible.data().phone, contacts.phone);
+
+      const fields = { position: 0, published: true, questionEn: 'ComaBank question', answerEn: 'ComaBank answer',
+        questionRu: 'Вопрос ComaBank', answerRu: 'Ответ ComaBank' };
+      const created = await send('adminCreateFaq', fields, variantB);
+      expect(created, 200);
+      faqId = created.data().id;
+      const params = { faqId };
+      const revised = { ...fields, answerRu: 'Обновлённый ответ ComaBank', expectedVersion: 1 };
+      expect(await send('adminUpdateFaq', revised, { params }), 404, 'NOT_FOUND');
+      expect(await send('adminDeleteFaq', undefined, { params, query: '?expectedVersion=1' }), 404, 'NOT_FOUND');
+      expect(await send('adminUpdateFaq', revised, { ...variantB, params }), 200);
+      const localized = await send('support', undefined, { query: '?variant=b&lang=ru' });
+      expect(localized, 200);
+      assert.deepEqual(localized.data().faq[0], { id: faqId, question: revised.questionRu, answer: revised.answerRu });
+      assert.deepEqual((await send('adminGetSupport')).data(), adminA.data());
+      assert.deepEqual((await send('support', undefined, { cookie: '' })).data(), publicA.data());
+      expect(await send('adminDeleteFaq', undefined, { params, query: '?variant=b&expectedVersion=2' }), 200);
+      assert.ok(!(await send('support', undefined, variantB)).data().faq.some(({ id }) => id === faqId));
+    } finally {
+      if (faqId) await db.execute(sql`DELETE FROM faq_entries WHERE id = ${faqId}`);
+      await db.execute(sql`UPDATE support_settings SET email = ${before.email}, phone = ${before.phone},
+        version = ${before.version} WHERE id = 2`);
+    }
+  });
+
   await t.test('Independent device access, one-time activation, fixed limits and account revocation', async () => {
     const email = randomUUID() + '@example.test';
     const created = await send('createUser', { email: ' ' + email.toUpperCase() + ' ' });

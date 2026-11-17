@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import type { Language, Result, StatisticsQuery } from '@teta/contracts';
 import { request } from './api';
+import { isComaBank } from './app-variant';
 import { copy } from './copy';
 import { apiErrorCode } from './finance-commands';
 import type { FinanceAccess } from './finance-commands';
@@ -132,9 +133,14 @@ export function StatisticsScreen({ statistics, accounts, categories, lang, onEdi
   const t = statisticsCopy[lang];
   const f = financeCopy[lang];
   const { width, fontScale } = useWindowDimensions();
-  const stackMetrics = Math.min(width, 540) / fontScale < 300;
   const { filters, periodMode, drill, report, loading, error } = statistics;
+  const reportWidth = Math.min(width, styles.page.maxWidth);
+  const metricsWidth = isComaBank ? reportWidth - styles.page.paddingHorizontal * 2 : reportWidth;
+  const stackMetrics = metricsWidth / fontScale < 300 || (isComaBank && report?.totals.some(({ incomeMinor, expenseMinor }) =>
+    incomeMinor.length > 12 || expenseMinor.length > 12));
   const period = report ?? (filters.fromDate && filters.throughDate ? { fromDate: filters.fromDate, throughDate: filters.throughDate } : undefined);
+  const periodName = periodMode === 'custom' ? t.period : t[periodMode];
+  const periodDates = period && [period.fromDate, period.throughDate].map((date) => formatFinancialDate(date, lang)).join(' – ');
   const categoryNames = new Map(categories?.map(({ id, nameEn, nameRu }) => [id, lang === 'en' ? nameEn : nameRu]));
   const accountNames = new Map(accounts?.map(({ accountId, name }) => [accountId, name]));
   const filterLabels = [filters.accountId && (accountNames.get(filters.accountId) ?? f.account),
@@ -157,24 +163,35 @@ export function StatisticsScreen({ statistics, accounts, categories, lang, onEdi
     } });
   }
 
+  const filterButton = <Pressable accessibilityRole="button" testID="statistics-filters" onPress={openFilters}
+    style={({ pressed }) => isComaBank ? [layout.comabankFilters, pressed && styles.dimmed]
+      : [styles.button, layout.filters, pressed && styles.checked]}>
+    <FinanceIcon name="filters" color={palette.accent} size={16} />
+    <Text style={[styles.buttonText, isComaBank && layout.comabankFilterText]}>{t.filters}</Text>
+  </Pressable>;
+  const filterSummary = filterLabels.length > 0 && <Text style={[styles.meta, !isComaBank && layout.filterSummary]}>
+    {filterLabels.join(' · ')}
+  </Text>;
+
   return <View style={layout.report}>
-    <View style={[styles.surface, layout.header]}>
+    {isComaBank ? <View style={layout.comabankHeader}>
+      <View style={layout.comabankTitleRow}>
+        <Text accessibilityRole="header" style={[styles.heading, layout.comabankTitle]}>{t.title}</Text>
+        {filterButton}
+      </View>
+      <Text style={styles.meta} testID="statistics-period">{[periodName, periodDates].filter(Boolean).join(' · ')}</Text>
+      {filterSummary}
+    </View> : <View style={[styles.surface, layout.header]}>
       <View style={layout.period}>
         <FinanceIcon name="calendar" color={palette.accent} size={18} />
         <View style={layout.labels}>
-          <Text style={styles.groupTitle}>{periodMode === 'custom' ? t.period : t[periodMode]}</Text>
-          {period && <Text style={styles.meta} testID="statistics-period">
-            {formatFinancialDate(period.fromDate, lang)} – {formatFinancialDate(period.throughDate, lang)}
-          </Text>}
+          <Text style={styles.groupTitle}>{periodName}</Text>
+          {periodDates && <Text style={styles.meta} testID="statistics-period">{periodDates}</Text>}
         </View>
       </View>
-      <Pressable accessibilityRole="button" testID="statistics-filters" onPress={openFilters}
-        style={({ pressed }) => [styles.button, layout.filters, pressed && styles.checked]}>
-        <FinanceIcon name="filters" color={palette.accent} size={16} />
-        <Text style={styles.buttonText}>{t.filters}</Text>
-      </Pressable>
-      {filterLabels.length > 0 && <Text style={[styles.meta, layout.filterSummary]}>{filterLabels.join(' · ')}</Text>}
-    </View>
+      {filterButton}
+      {filterSummary}
+    </View>}
     {drill && <View style={layout.actions}>
       <FinanceButton title={t.report} onPress={() => { statistics.closeCategory(); scrollToTop(); }}
         testID="statistics-clear-drill" />
@@ -185,22 +202,23 @@ export function StatisticsScreen({ statistics, accounts, categories, lang, onEdi
     </View>}
     {(loading || report) && <>
       <View style={layout.section}>
-        <Text accessibilityRole="header" style={styles.groupTitle}>{t.totals}</Text>
-        <View style={styles.surface}>
+        <Text accessibilityRole="header" style={isComaBank ? styles.section : styles.groupTitle}>{t.totals}</Text>
+        <View style={!isComaBank && styles.surface}>
           {!report && <ActivityIndicator style={layout.message} color={palette.accent} accessibilityLabel={f.loading} />}
           {report?.totals.length === 0 && <Text style={[styles.meta, layout.message]} testID="statistics-empty">{t.empty}</Text>}
           {report?.totals.map(({ currency, incomeMinor, expenseMinor }, index) => (
-            <View key={currency} style={[layout.totalGroup, index > 0 && layout.divider]} testID={'statistics-total-' + currency}>
+            <View key={currency} style={[layout.totalGroup, isComaBank ? layout.comabankTotalGroup : index > 0 && layout.divider]}
+              testID={'statistics-total-' + currency}>
               <View style={stackMetrics ? layout.stackedMetrics : layout.metrics}>
                 <View style={[layout.metric, !stackMetrics && layout.metricColumn]}>
                   <Text style={styles.meta}>{t.income}</Text>
-                  <Text style={[layout.amount, layout.income]}>
+                  <Text style={[layout.amount, isComaBank && layout.comabankAmount, layout.income]}>
                     {formatMoney(incomeMinor, currency, lang)}
                   </Text>
                 </View>
                 <View style={[layout.metric, !stackMetrics && layout.metricColumn]}>
                   <Text style={styles.meta}>{t.expenses}</Text>
-                  <Text style={layout.amount}>
+                  <Text style={[layout.amount, isComaBank && layout.comabankAmount]}>
                     {formatMoney(expenseMinor, currency, lang)}
                   </Text>
                 </View>
@@ -210,8 +228,8 @@ export function StatisticsScreen({ statistics, accounts, categories, lang, onEdi
         </View>
       </View>
       {report && !drill && report.totals.length > 0 && <View style={layout.section}>
-        <Text accessibilityRole="header" style={styles.groupTitle}>{t.expensesByCategory}</Text>
-        <View style={styles.surface}>
+        <Text accessibilityRole="header" style={isComaBank ? styles.section : styles.groupTitle}>{t.expensesByCategory}</Text>
+        <View style={!isComaBank && styles.surface}>
           {report.categories.length === 0 && <Text style={[styles.meta, layout.message]}>{t.emptyExpenses}</Text>}
           {report.totals.filter(({ currency }) => report.categories.some((category) => category.currency === currency))
             .map(({ currency, expenseMinor }, index) => (
@@ -220,7 +238,8 @@ export function StatisticsScreen({ statistics, accounts, categories, lang, onEdi
                   <Pressable key={entry.categoryId} accessibilityRole="button"
                     testID={`statistics-expense-${currency}-${entry.categoryId}`}
                     onPress={() => { statistics.openCategory(entry); scrollToTop(); }}
-                    style={({ pressed }) => [layout.categoryRow, pressed && layout.pressed]}>
+                    style={({ pressed }) => [layout.categoryRow, isComaBank && layout.flush,
+                      pressed && (isComaBank ? styles.dimmed : layout.pressed)]}>
                     <View style={layout.line}>
                       <Text style={styles.title}>{categoryNames.get(entry.categoryId) ?? entry.categoryId}</Text>
                       <Text style={layout.entryAmount}>{formatMoney(entry.amountMinor, currency, lang)}</Text>
@@ -235,11 +254,11 @@ export function StatisticsScreen({ statistics, accounts, categories, lang, onEdi
         </View>
       </View>}
       {report && entriesByDay.size > 0 && <View style={layout.section}>
-        <Text accessibilityRole="header" style={styles.groupTitle}>{t.transactions}</Text>
-        <View style={styles.surface}>
+        <Text accessibilityRole="header" style={isComaBank ? styles.section : styles.groupTitle}>{t.transactions}</Text>
+        <View style={!isComaBank && styles.surface}>
           {[...entriesByDay].map(([date, entries], dayIndex) => (
             <View key={date} style={dayIndex > 0 && layout.divider}>
-              <Text accessibilityRole="header" style={layout.day}>{formatFinancialDate(date, lang)}</Text>
+              <Text accessibilityRole="header" style={[layout.day, isComaBank && layout.flush]}>{formatFinancialDate(date, lang)}</Text>
               {entries.map((entry, rowIndex) => {
                 const isIncome = entry.type === 'income';
                 const color = transactionAmountColor(entry.amountMinor);
@@ -248,7 +267,8 @@ export function StatisticsScreen({ statistics, accounts, categories, lang, onEdi
                 const description = entry.source ?? entry.incomeSource ?? entry.comment;
                 return <Pressable key={entry.transactionId} accessibilityRole="button" onPress={() => onTransaction(entry)}
                   testID={'statistics-transaction-' + entry.transactionId}
-                  style={({ pressed }) => [layout.transaction, rowIndex > 0 && layout.divider, pressed && layout.pressed]}>
+                  style={({ pressed }) => [layout.transaction, isComaBank && layout.flush, rowIndex > 0 && layout.divider,
+                    pressed && (isComaBank ? styles.dimmed : layout.pressed)]}>
                   <View style={layout.identity}>
                     <FinanceIcon name={isIncome ? 'income' : 'expense'} color={color} size={18} />
                     <View style={layout.labels}>
@@ -276,6 +296,11 @@ const layout = StyleSheet.create({
   report: { gap: 18 },
   header: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between',
     gap: 8, padding: 10 },
+  comabankHeader: { gap: 5, paddingBottom: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: palette.line },
+  comabankTitleRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', columnGap: 10 },
+  comabankTitle: { flexShrink: 1 },
+  comabankFilters: { minHeight: 44, maxWidth: '100%', flexDirection: 'row', alignItems: 'center', gap: 5 },
+  comabankFilterText: { color: palette.accent },
   period: { flexDirection: 'row', alignItems: 'center', flexGrow: 1, flexBasis: '48%', minWidth: 128, gap: 8 },
   labels: { flex: 1, gap: 3 },
   filterSummary: { width: '100%', paddingHorizontal: 4 },
@@ -284,12 +309,14 @@ const layout = StyleSheet.create({
   section: { gap: 8 },
   message: { padding: 12, gap: 8 },
   totalGroup: { gap: 6, paddingHorizontal: 12, paddingVertical: 10 },
+  comabankTotalGroup: { paddingHorizontal: 0, borderBottomColor: palette.line, borderBottomWidth: StyleSheet.hairlineWidth },
   divider: { borderTopColor: palette.line, borderTopWidth: StyleSheet.hairlineWidth },
   metrics: { flexDirection: 'row', gap: 10 },
   stackedMetrics: { gap: 8 },
   metric: { gap: 3 },
   metricColumn: { flex: 1 },
   amount: { color: palette.ink, fontSize: 19, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  comabankAmount: { fontSize: 23, letterSpacing: -0.5 },
   income: { color: palette.positive },
   categoryGroup: { paddingVertical: 6 },
   categoryRow: { paddingHorizontal: 12, paddingVertical: 8, gap: 6, minHeight: 48, justifyContent: 'center' },
@@ -302,6 +329,7 @@ const layout = StyleSheet.create({
     gap: 8, paddingHorizontal: 12, paddingVertical: 8 },
   identity: { flexDirection: 'row', alignItems: 'center', flexGrow: 1, flexBasis: '45%', minWidth: 104, gap: 8 },
   pressed: { backgroundColor: palette.ground },
+  flush: { paddingHorizontal: 0 },
   entryAmount: { color: palette.ink, fontSize: 15, fontWeight: '600', fontVariant: ['tabular-nums'],
     textAlign: 'right', marginLeft: 'auto', flexShrink: 1 },
 });

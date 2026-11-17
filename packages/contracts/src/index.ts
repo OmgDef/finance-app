@@ -1,8 +1,8 @@
 import { Type as T } from '@sinclair/typebox';
 import type { Static, TSchema } from '@sinclair/typebox';
-import { avatarMaxBytes, cardNetworks, endpoints } from './client.ts';
+import { avatarMaxBytes, cardNetworks, endpoints, supportVariants } from './client.ts';
 export { avatarMaxBytes, avatarMaxPixels } from './client.ts';
-export type { CardNetwork } from './client.ts';
+export type { CardNetwork, SupportVariant } from './client.ts';
 
 export const language = T.Union([T.Literal('en'), T.Literal('ru')]);
 const email = T.String({ minLength: 3, maxLength: 254, pattern: '^\\s*[^\\s@]+@[^\\s@]+\\.[^\\s@]+\\s*$' });
@@ -53,7 +53,7 @@ const depositTerms = {
   type: T.Literal('deposit'),
   annualRatePercent: T.String({
     pattern: '^(0|[1-9][0-9]{0,2})(\\.[0-9]{1,4})?$',
-    description: 'Informational annual rate in percent as a decimal string, from 0 to 999.9999. Responses use four fractional digits.',
+    description: 'Annual rate in percent as a decimal string, from 0 to 999.9999. The monthly rate is one twelfth of this rate. Responses use four fractional digits.',
   }),
   maturityDate: financialDate,
 };
@@ -79,6 +79,32 @@ const createAccountInput = T.Union([
   T.Object({ ...createAccountFields, ...depositTerms }, { additionalProperties: false }),
 ]);
 const accountStartDateFields = { startDate: financialDate, expectedAccountVersion: ledgerVersion };
+const depositInterestDecision = T.Union([
+  T.Object({ action: T.Literal('post') }, { additionalProperties: false }),
+  T.Object({ action: T.Literal('useTransaction'), transactionId: id }, { additionalProperties: false }),
+  T.Object({ action: T.Literal('useAdjustment'), adjustmentId: id }, { additionalProperties: false }),
+]);
+const depositInterestInput = T.Object({
+  previewId: secret, decision: T.Optional(depositInterestDecision), idempotencyKey,
+}, { additionalProperties: false });
+const depositInterestPeriod = T.Object({
+  fromDate: financialDate, date: financialDate, calculatedMinor: balanceMinor,
+  recordedMinor: T.Union([balanceMinor, T.Null()]), changeMinor: T.Union([balanceMinor, T.Null()]),
+  status: T.Union([T.Literal('post'), T.Literal('existing'), T.Literal('zero'), T.Literal('review')]),
+  transactions: T.Optional(T.Array(T.Object({ transactionId: id, date: financialDate, amountMinor: signedMinor }))),
+  adjustments: T.Optional(T.Array(T.Object({ adjustmentId: id, date: financialDate, actualBalanceMinor: signedMinor }))),
+  canPost: T.Optional(T.Boolean()),
+});
+const depositInterestPreview = T.Object({
+  accountId: id, currency, balanceMinor, previewId: secret, nextDate: T.Union([financialDate, T.Null()]),
+  periods: T.Array(depositInterestPeriod),
+  blockedBy: T.Optional(T.Object({
+    ruleId: id, reason: T.Union([T.Literal('competing'), T.Literal('pending')]),
+  })),
+});
+const depositInterestResult = T.Object({
+  accountId: id, accountVersion: ledgerVersion, currency, balanceMinor, settledPeriods: T.Integer({ minimum: 1 }),
+}, { additionalProperties: false });
 const accountParams = T.Object({ accountId: id });
 const accountStatementQuery = T.Object({ fromDate: financialDate, throughDate: financialDate, lang: language },
   { additionalProperties: false });
@@ -148,7 +174,7 @@ const restoreFailures = {
   ...accountNotFound,
   503: 'TEMPORARY_FAILURE after exhausting transaction retries for a database lock error.',
 };
-const createAccountDescription = 'The start date must be today or earlier in the profile time zone. Deposits require an informational annual rate and a maturity date on or after the start date. Repeating the same key and equivalent payload returns the account details and balance at creation.';
+const createAccountDescription = 'The start date must be today or earlier in the profile time zone. Deposits require an annual rate for monthly capitalization and a maturity date on or after the start date. Repeating the same key and equivalent payload returns the account details and balance at creation.';
 const createAccountFailures = {
   400: 'INVALID_REQUEST for invalid account fields, a future start date, or a maturity date before the start date.',
   409: commandWriteConflicts,
@@ -158,7 +184,7 @@ const updateAccountStartDateDescription = 'Moves the date of the opening balance
 const updateAccountStartDateFailures = {
   ...restoreFailures,
   400: 'INVALID_REQUEST for a future start date or a start date after deposit maturity.',
-  409: 'ACCOUNT_START_DATE_CONFLICT when the start date would move past a transaction, reconciliation, or schedule rule. VERSION_CONFLICT for a stale version, or ACCOUNT_UNAVAILABLE for an archived account.',
+  409: 'ACCOUNT_START_DATE_CONFLICT when the start date would move past a transaction, reconciliation, or schedule rule. DEPOSIT_INTEREST_STARTED after an interest period has been settled. VERSION_CONFLICT for a stale version, or ACCOUNT_UNAVAILABLE for an archived account.',
 };
 const archiveFailures = {
   ...restoreFailures,
@@ -260,6 +286,7 @@ const accountHistory = T.Object({
       type: T.Union([T.Literal('expense'), T.Literal('income'), T.Literal('transfer')]),
       transactionVersion: ledgerVersion, status: transactionStatus, actorRole: financialActor,
       categoryId: T.Union([T.String(), T.Null()]), comment: T.Union([T.String(), T.Null()]), ...sourceReadFields,
+      automaticInterest: T.Optional(T.Literal(true)),
     }, { additionalProperties: false }),
   ])),
   next: T.Union([accountHistoryCursor, T.Null()]),
@@ -368,6 +395,11 @@ const publicContacts = {
   email: T.Union([email, T.Null()]),
   phone: T.Union([T.String({ maxLength: 32 }), T.Null()]),
 };
+const supportVariantFields = { variant: T.Optional(T.Union(supportVariants.map((variant) => T.Literal(variant)), {
+  default: 'a', description: 'App variant. a is TetaFinance and b is ComaBank.',
+})) };
+const supportVariantQuery = T.Object(supportVariantFields);
+const invalidSupportVariant = 'INVALID_REQUEST for an unknown app variant.';
 const supportContacts = T.Object({ ...publicContacts, version: ledgerVersion });
 const supportContactInput = T.Object({
   email: T.Union([T.String({ maxLength: 254 }), T.Null()]),
@@ -384,11 +416,11 @@ const faqId = T.String({ minLength: 1, maxLength: 64 });
 const faqParams = T.Object({ faqId });
 const faqEntry = T.Object({ id: faqId, version: ledgerVersion, ...faqFields });
 const faqWriteFailures = {
-  400: 'INVALID_REQUEST for invalid FAQ fields or publication without both complete translations.',
+  400: 'INVALID_REQUEST for an unknown app variant, invalid FAQ fields, or publication without both complete translations.',
   413: 'INVALID_REQUEST if the serialized FAQ request exceeds 64 KiB.',
 };
 const faqVersionFailures = {
-  404: 'NOT_FOUND when the FAQ entry is absent.',
+  404: 'NOT_FOUND when the FAQ entry is absent in the selected app variant.',
   409: 'VERSION_CONFLICT when the content has changed since the form was opened.',
 };
 const adminScheduleRuleParams = T.Object({ userId: id, ruleId: id });
@@ -500,6 +532,9 @@ const commandKeyFields = { idempotencyKey, userId: id };
 const accountReconcileKey = T.Object({
   ...commandKeyFields, command: T.Literal('account.reconcile'), accountId: id,
 }, { additionalProperties: false });
+const depositInterestKey = T.Object({
+  ...commandKeyFields, command: T.Literal('deposit.interest.apply'), accountId: id,
+}, { additionalProperties: false });
 const accountDeleteKey = T.Object({
   ...commandKeyFields, command: T.Literal('account.delete'), accountId: id,
 }, { additionalProperties: false });
@@ -521,6 +556,7 @@ const adminCommandKey = T.Union([
 ]);
 const mobileCommandKey = T.Union([
   accountCreateKey,
+  depositInterestKey,
   T.Object({
     ...commandKeyFields, command: T.Union([T.Literal('expense.record'), T.Literal('income.record')]), accountId: id,
   }, { additionalProperties: false }),
@@ -533,7 +569,7 @@ const committedCommand = T.Object({
   state: T.Literal('committed'),
   result: T.Union([
     accountBalance, transactionRecord, balanceAdjustment, transactionChange, scheduleSkipResult, replacementResult,
-    scheduleDeleteResult, accountDeleteResult,
+    scheduleDeleteResult, accountDeleteResult, depositInterestResult,
   ]),
 });
 const commandStatus = T.Union([committedCommand, T.Object({ state: T.Literal('unknown') })]);
@@ -559,8 +595,9 @@ export const routes = {
     ...route(endpoints.support, 'public', 'Read published support contacts and FAQ', empty,
       T.Object({ ...publicContacts,
         faq: T.Array(T.Object({ id: T.String(), question: T.String(), answer: T.String() })) })),
-    query: T.Object({ lang: T.Optional(language) }),
-    description: 'Does not require an installation or session. Unconfigured contacts are null. Includes complete, published FAQ entries ordered by position and stable ID. Language defaults to English.',
+    query: T.Object({ ...supportVariantFields, lang: T.Optional(language) }),
+    description: 'Available before sign-in. Contacts and complete, published FAQ entries belong to the selected app variant. Unconfigured contacts are null. Entries are ordered by position and stable ID. The default variant is a and the default language is English.',
+    failures: { 400: 'INVALID_REQUEST for an unknown app variant or language.' },
   },
   activate: {
     ...route(endpoints.activate, 'public', 'Activate a new installation with a one-time code', T.Object({
@@ -624,6 +661,19 @@ export const routes = {
     params: accountParams,
     description: 'Returns the balance and account version from the same database snapshot, with the annual rate and maturity date for deposits.',
     failures: { 404: 'NOT_FOUND when the account is absent or belongs to another user.' },
+  },
+  previewDepositInterest: {
+    ...route(endpoints.previewDepositInterest, 'mobile', 'Preview due interest for an owned deposit', empty, depositInterestPreview),
+    params: accountParams,
+    description: 'Shows up to twelve consecutive due periods from the first unsettled date. A period requiring a decision or a conflicting scheduled entry stops the preview at that point. Amounts are in minor units.',
+    failures: { 404: 'NOT_FOUND when the deposit is absent or belongs to another user.', 409: 'ACCOUNT_UNAVAILABLE for an archived deposit.' },
+  },
+  applyDepositInterest: {
+    ...route(endpoints.applyDepositInterest, 'mobile', 'Settle previewed deposit interest', depositInterestInput, depositInterestResult),
+    params: accountParams,
+    description: 'Applies the previewed periods in order. A decision, when supplied, resolves the last period if it requires review. An identical retry returns the original result.',
+    failures: { ...accountNotFound, 400: 'INVALID_REQUEST for an empty preview or an invalid decision.',
+      409: 'VERSION_CONFLICT for a changed preview, or ACCOUNT_UNAVAILABLE for an archived deposit. ' + commandWriteConflicts },
   },
   getAccountBalanceSeries: {
     ...route(endpoints.getAccountBalanceSeries, 'mobile', 'Read six months of balances for an owned account', empty,
@@ -855,31 +905,36 @@ export const routes = {
   adminGetSupport: {
     ...route(endpoints.adminGetSupport, 'admin', 'Read contacts and bilingual FAQ for editing', empty,
       T.Object({ contacts: supportContacts, faq: T.Array(faqEntry) })),
-    description: 'Includes drafts and both translations. FAQ entries are ordered by position and stable ID.',
+    query: supportVariantQuery,
+    description: 'Includes contacts, drafts and both translations for the selected app variant. FAQ entries are ordered by position and stable ID.',
+    failures: { 400: invalidSupportVariant },
   },
   adminUpdateSupportContacts: {
     ...route(endpoints.adminUpdateSupportContacts, 'admin', 'Replace the public support contacts', supportContactInput, supportContacts),
-    description: 'Send the current version. Null and blank values clear their respective contact. Phone numbers may include a leading plus and visual separators.',
-    failures: { 400: 'INVALID_REQUEST for invalid email or telephone format.', 409: faqVersionFailures[409] },
+    query: supportVariantQuery,
+    description: 'Send the current contacts version for the selected app variant. Null and blank values clear their respective contact. Phone numbers may include a leading plus and visual separators.',
+    failures: { 400: 'INVALID_REQUEST for an unknown app variant or invalid email or telephone format.', 409: faqVersionFailures[409] },
   },
   adminCreateFaq: {
     ...route(endpoints.adminCreateFaq, 'admin', 'Create a draft or published FAQ entry',
       T.Object(faqFields, { additionalProperties: false }), faqEntry),
-    description: 'The server assigns a stable ID. Smaller positions are shown first. Publication requires a question and answer in both languages.',
+    query: supportVariantQuery,
+    description: 'Creates an entry in the selected app variant with a stable ID. Smaller positions are shown first. Publication requires a question and answer in both languages.',
     failures: faqWriteFailures,
   },
   adminUpdateFaq: {
     ...route(endpoints.adminUpdateFaq, 'admin', 'Replace an existing FAQ entry',
       T.Object({ ...faqFields, expectedVersion: ledgerVersion }, { additionalProperties: false }), faqEntry),
     params: faqParams,
+    query: supportVariantQuery,
     description: 'Retains the entry ID and allows editing translations, position and publication status.',
     failures: { ...faqWriteFailures, ...faqVersionFailures },
   },
   adminDeleteFaq: {
     ...route(endpoints.adminDeleteFaq, 'admin', 'Delete an existing FAQ entry', empty, ok),
     params: faqParams,
-    query: T.Object({ expectedVersion: T.String({ pattern: '^[1-9]\\d{0,9}$' }) }, { additionalProperties: false }),
-    failures: { 400: 'INVALID_REQUEST for an invalid version.', ...faqVersionFailures },
+    query: T.Object({ ...supportVariantFields, expectedVersion: T.String({ pattern: '^[1-9]\\d{0,9}$' }) }, { additionalProperties: false }),
+    failures: { 400: 'INVALID_REQUEST for an unknown app variant or invalid entry version.', ...faqVersionFailures },
   },
   listUsers: {
     ...route(endpoints.listUsers, 'admin', 'List accounts by ascending normalized email', empty,
@@ -1095,7 +1150,8 @@ export const errorCodes = [
   'BIOMETRICS_INVALID', 'SESSION_EXPIRED', 'ADMIN_AUTH_INVALID', 'CSRF_INVALID',
   'RATE_LIMITED', 'EMAIL_EXISTS', 'ACCOUNT_UNAVAILABLE', 'ACCOUNT_REVIEW_REQUIRED', 'ACCOUNT_REVIEW_CONFLICT', 'NOT_FOUND', 'INTERNAL_ERROR',
   'IDEMPOTENCY_CONFLICT', 'COMMAND_CLOSED', 'COMMAND_REQUIRES_REVIEW', 'TEMPORARY_FAILURE',
-  'VERSION_CONFLICT', 'TRANSACTION_VOID', 'ACCOUNT_BALANCE_NOT_ZERO', 'ACCOUNT_START_DATE_CONFLICT', 'SCHEDULE_DATE_CONFLICT', 'SCHEDULE_DATES_PENDING',
+  'VERSION_CONFLICT', 'TRANSACTION_VOID', 'ACCOUNT_BALANCE_NOT_ZERO', 'ACCOUNT_START_DATE_CONFLICT', 'DEPOSIT_INTEREST_STARTED',
+  'SCHEDULE_DATE_CONFLICT', 'SCHEDULE_DATES_PENDING',
   'SCHEDULE_FUTURE_DATES', 'SCHEDULE_RULE_STATE_CONFLICT', 'SCHEDULE_REPLACEMENT_CONFLICT', 'TIME_ZONE_CONFLICT',
   'STATEMENT_TOO_LARGE', 'INVALID_AVATAR', 'INVALID_BIRTH_DATE', 'PROFILE_UNAVAILABLE',
 ] as const;

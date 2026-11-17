@@ -1,12 +1,27 @@
 import type { ExpoConfig } from 'expo/config';
 import bootsplash from 'react-native-bootsplash/expo';
-import { appVariants } from './src/app-variants.ts';
+import { appVariants, comabankBackground, comabankIconBackground } from './src/app-variants.ts';
 
-const appVariant = process.env.APP_VARIANT ?? 'a';
+const variants = ['a', 'b'] as const;
+const iosConfigurations = { a: 'ReleaseTetaFinance', b: 'ReleaseComaBank' } as const;
+const iosVariant = variants.find((variant) => iosConfigurations[variant] === process.env.CONFIGURATION);
+const appVariant = iosVariant ?? process.env.APP_VARIANT ?? 'a';
 if (appVariant !== 'a' && appVariant !== 'b') throw new Error('APP_VARIANT must be a or b.');
+const assetDirectories = { a: './assets/app-icon', b: './assets/app-icon/wallet' } as const;
+const splashBackgrounds = { a: appVariants.a.brandColor, b: comabankBackground } as const;
+const iosStyle = { a: 'automatic', b: 'dark' } as const;
+const logoWidth = 134;
 const { name, brandColor } = appVariants[appVariant];
-const assets = appVariant === 'b' ? './assets/app-icon/wallet' : './assets/app-icon';
+const isComaBank = appVariant === 'b';
+const assets = assetDirectories[appVariant];
 const appIconForeground = `${assets}/android-foreground.png`;
+
+const faceIdPermission = (displayName: string) => `Unlock ${displayName} with Face ID.`;
+const russianInfo = (displayName: string) => ({
+  CFBundleDisplayName: displayName,
+  NSFaceIDUsageDescription: `Разблокируйте ${displayName} с помощью Face ID.`,
+  NSPhotoLibraryUsageDescription: 'Выберите фото для своего профиля.',
+});
 
 export default {
   name: name.en,
@@ -20,17 +35,33 @@ export default {
     'expo-router',
     bootsplash({
       logo: `${assets}/splash-logo.png`,
-      logoWidth: 134,
-      background: brandColor,
+      logoWidth,
+      background: splashBackgrounds[appVariant],
       assetsOutput: '.expo/bootsplash',
       android: { darkContentBarsStyle: false },
     }),
-    ['expo-secure-store', { configureAndroidBackup: false, faceIDPermission: `Unlock ${name.en} with Face ID.` }],
+    ['expo-secure-store', { configureAndroidBackup: false, faceIDPermission: faceIdPermission(name.en) }],
     ['expo-image-picker', { photosPermission: 'Choose a photo for your profile.', cameraPermission: false, microphonePermission: false }],
     './src/installation-backup.cjs',
+    ['./scripts/with-ios-schemes.cjs', { logoWidth, variants: variants.map((variant) => {
+      const { name } = appVariants[variant];
+      return {
+        name: name.en,
+        configuration: iosConfigurations[variant],
+        assets: assetDirectories[variant],
+        splashBackground: splashBackgrounds[variant],
+        infoPlist: {
+          CFBundleDisplayName: name.en,
+          NSFaceIDUsageDescription: faceIdPermission(name.en),
+          UIUserInterfaceStyle: iosStyle[variant] === 'dark' ? 'Dark' : null,
+        },
+        russianInfo: russianInfo(name.ru),
+      };
+    }) }],
   ],
   ios: {
     bundleIdentifier: 'com.tetafinance.app',
+    ...(isComaBank && { userInterfaceStyle: iosStyle.b }),
     infoPlist: { CFBundleAllowMixedLocalizations: true, CFBundleLocalizations: ['en', 'ru'] },
   },
   android: {
@@ -38,17 +69,13 @@ export default {
     allowBackup: false,
     adaptiveIcon: {
       foregroundImage: appIconForeground,
-      monochromeImage: appIconForeground,
-      backgroundColor: brandColor,
+      monochromeImage: isComaBank ? `${assets}/android-monochrome.png` : appIconForeground,
+      backgroundColor: isComaBank ? comabankIconBackground : brandColor,
     },
   },
   locales: {
     ru: {
-      ios: {
-        CFBundleDisplayName: name.ru,
-        NSFaceIDUsageDescription: `Разблокируйте ${name.ru} с помощью Face ID.`,
-        NSPhotoLibraryUsageDescription: 'Выберите фото для своего профиля.',
-      },
+      ios: russianInfo(name.ru),
       android: { app_name: name.ru },
     },
   },

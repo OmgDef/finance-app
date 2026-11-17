@@ -56,6 +56,8 @@ export function prepareRecovery(db: Db, input: Preparation, now = Date.now()) {
       SELECT 'operator', id, id, 'account.recovery_pending', ${now}, JSON_OBJECT('from', status, 'to', 'review') FROM users`);
     await tx.execute(sql`UPDATE users SET status = 'review'`);
     await tx.execute(sql`UPDATE schedule_rules SET recovery_held = TRUE WHERE deleted_at IS NULL`);
+    await tx.execute(sql`UPDATE accounts SET interest_review_before = ${now}
+      WHERE next_interest_date IS NOT NULL AND deleted_at IS NULL`);
     await tx.execute(sql`DELETE FROM schedule_worker_state WHERE id = 1`);
     await tx.execute(sql`INSERT INTO recovery_state (id, version, snapshot_at, incident_at, prepared_at)
       VALUES (1, ${version}, ${snapshotAt}, ${incidentAt}, ${now})

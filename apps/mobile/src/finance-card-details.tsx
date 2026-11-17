@@ -1,6 +1,8 @@
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { Language, Result } from '@teta/contracts';
+import { isComaBank } from './app-variant';
+import { ComaBankCard } from './comabank-card';
 import { copy } from './copy';
 import { CardNetworkLogo, cardNetworkLabel } from './finance-card-network';
 import { financeCopy } from './finance-copy';
@@ -36,39 +38,41 @@ export function CardDetails({ card, accountName, lang, loading, error, editDisab
       </Pressable>
     </View>
     <ScrollView contentContainerStyle={layout.content} contentInsetAdjustmentBehavior="never">
+      {isComaBank && <Text accessibilityRole="header" style={styles.heading}>{t.cardDetails}</Text>}
       {card && <>
-        <View style={layout.cardFrame}>
-          <View style={[layout.card, { backgroundColor: card.appearance }]} testID="finance-card-details">
-            <Text accessibilityRole="header" style={[layout.cardName, { color: foreground }]}
-              numberOfLines={2} maxFontSizeMultiplier={1.4}>{card.name}</Text>
-            <View style={layout.cardMiddle}>
-              <View style={layout.chip} accessible={false}>
-                <View style={layout.chipSide}><View style={layout.chipDivider} /></View>
-                <View style={layout.chipCenter} />
-                <View style={layout.chipSide}><View style={layout.chipDivider} /></View>
+        <View style={[layout.cardFrame, isComaBank && layout.comabankCardFrame]}>
+          {isComaBank ? <ComaBankCard card={card} lang={lang} balance={balance} testID="finance-card-details" /> :
+            <View style={[layout.card, { backgroundColor: card.appearance }]} testID="finance-card-details">
+              <Text accessibilityRole="header" style={[layout.cardName, { color: foreground }]}
+                numberOfLines={2} maxFontSizeMultiplier={1.4}>{card.name}</Text>
+              <View style={layout.cardMiddle}>
+                <View style={layout.chip} accessible={false}>
+                  <View style={layout.chipSide}><View style={layout.chipDivider} /></View>
+                  <View style={layout.chipCenter} />
+                  <View style={layout.chipSide}><View style={layout.chipDivider} /></View>
+                </View>
+                <View style={layout.cardBalance} accessible accessibilityLabel={`${t.linkedAccountBalance}, ${balance}`}>
+                  <Text style={[layout.balanceLabel, { color: foreground }]} maxFontSizeMultiplier={1.3}>
+                    {t.linkedAccountBalance}
+                  </Text>
+                  <Text style={[layout.balanceAmount, { color: foreground }]} numberOfLines={1}
+                    maxFontSizeMultiplier={1.3} adjustsFontSizeToFit>{balance}</Text>
+                </View>
               </View>
-              <View style={layout.cardBalance} accessible accessibilityLabel={`${t.linkedAccountBalance}, ${balance}`}>
-                <Text style={[layout.balanceLabel, { color: foreground }]} maxFontSizeMultiplier={1.3}>
-                  {t.linkedAccountBalance}
-                </Text>
-                <Text style={[layout.balanceAmount, { color: foreground }]} numberOfLines={1}
-                  maxFontSizeMultiplier={1.3} adjustsFontSizeToFit>{balance}</Text>
+              <View style={layout.cardBottom}>
+                {card.lastFour && <Text style={[layout.lastFour, { color: foreground }]} numberOfLines={1}
+                  maxFontSizeMultiplier={1.4}>{`•••• ${card.lastFour}`}</Text>}
+                <CardNetworkLogo network={card.network} appearance={card.appearance} large
+                  style={layout.cardLogo} accessibilityLabel={cardNetworkLabel(card.network, lang)} />
               </View>
-            </View>
-            <View style={layout.cardBottom}>
-              {card.lastFour && <Text style={[layout.lastFour, { color: foreground }]} numberOfLines={1}
-                maxFontSizeMultiplier={1.4}>{`•••• ${card.lastFour}`}</Text>}
-              <CardNetworkLogo network={card.network} appearance={card.appearance} large
-                style={layout.cardLogo} accessibilityLabel={cardNetworkLabel(card.network, lang)} />
-            </View>
-          </View>
+            </View>}
         </View>
-        <View style={layout.panel}>
-          <Text accessibilityRole="header" style={layout.panelHeading}>{t.linkedAccount}</Text>
+        <View style={isComaBank ? layout.comabankAccount : layout.panel}>
+          <Text accessibilityRole="header" style={isComaBank ? styles.section : layout.panelHeading}>{t.linkedAccount}</Text>
           <DetailAction title={accountName ?? t.account} icon="wallet" onPress={onOpenAccount}
             testID="finance-card-details-account" />
         </View>
-        <View style={layout.panel}>
+        <View style={!isComaBank && layout.panel}>
           <DetailAction title={t.editCard} icon="settings" onPress={onEdit} disabled={editDisabled} testID="finance-card-details-edit" />
         </View>
       </>}
@@ -111,6 +115,7 @@ const layout = StyleSheet.create({
   linkText: { color: palette.accent, fontSize: 16, fontWeight: '600' },
   content: { ...styles.page, paddingTop: 10 },
   cardFrame: { width: '100%', maxWidth: 336, alignSelf: 'center' },
+  comabankCardFrame: { maxWidth: 420, alignSelf: 'flex-start' },
   card: { width: '100%', aspectRatio: 1.586, borderRadius: 16, padding: 18,
     borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(23,38,58,0.18)', justifyContent: 'space-between', gap: 8 },
   cardName: { fontSize: 17, fontWeight: '600', flexShrink: 1 },
@@ -127,6 +132,7 @@ const layout = StyleSheet.create({
   lastFour: { fontSize: 19, fontWeight: '600', fontVariant: ['tabular-nums'], letterSpacing: 1.6, flexShrink: 1 },
   cardLogo: { marginLeft: 'auto' },
   panel: { ...styles.surface, paddingHorizontal: 14 },
+  comabankAccount: { paddingTop: 8, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: palette.line },
   panelHeading: { ...styles.section, paddingTop: 14 },
   row: { minHeight: 56, flexDirection: 'row', alignItems: 'center', gap: 11, paddingVertical: 11 },
   rowIdentity: { flex: 1, gap: 2 },

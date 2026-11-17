@@ -1,6 +1,7 @@
 import { Image, StyleSheet } from 'react-native';
 import type { ImageProps, ImageSourcePropType } from 'react-native';
 import type { CardNetwork, Language } from '@teta/contracts';
+import { isComaBank } from './app-variant';
 import { financeCopy } from './finance-copy';
 import { cardTextColor } from './finance-ui';
 
@@ -20,7 +21,8 @@ export function CardNetworkLogo({ network, appearance, large, accessibilityLabel
   network?: CardNetwork | null; appearance?: string; large?: boolean; accessibilityLabel?: string; style?: ImageProps['style'];
 }) {
   if (!network) return null;
-  const tintColor = network === 'visa' && appearance ? cardTextColor(appearance) : undefined;
+  const tintColor = appearance && (network === 'visa' || (isComaBank && network === 'mir'))
+    ? cardTextColor(appearance) : undefined;
   return <Image source={networks[network].logo} resizeMode="contain" style={[layout.logo, large && layout.large, style, { tintColor }]}
     accessible={!!accessibilityLabel} accessibilityRole={accessibilityLabel ? 'image' : undefined}
     accessibilityLabel={accessibilityLabel} />;

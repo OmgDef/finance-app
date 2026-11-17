@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import type { Body, Language, Result } from '@teta/contracts';
+import type { Body, Language, Result, SupportVariant } from '@teta/contracts';
+import { supportVariants } from '@teta/contracts/client';
 import { api, errorCode } from './api';
 import { financeWords } from './finance-copy';
 import { Failure, LabeledInput, useQuery } from './finance-ui';
@@ -10,9 +11,10 @@ import './support.css';
 type Support = Result<'adminGetSupport'>;
 type Article = Support['faq'][number];
 type Edit = { entry?: Article; position: number };
+const variantNames = { a: 'A · TetaFinance', b: 'B · ComaBank' } satisfies Record<SupportVariant, string>;
 const words = {
   en: {
-    title: 'Support', contacts: 'Public contacts', contactsHelp: 'Visible before sign-in. Leave a field blank to hide that contact.',
+    title: 'Support', variant: 'App variant', contacts: 'Public contacts', contactsHelp: 'Visible before sign-in. Leave a field blank to hide that contact.',
     email: 'Support email', phone: 'Support phone', saveContacts: 'Save contacts',
     faq: 'Frequently asked questions', add: 'Add question', edit: 'Edit question', remove: 'Delete question',
     removeConfirm: 'Delete this FAQ entry?', none: 'No questions have been added.', published: 'Published', draft: 'Draft',
@@ -25,7 +27,7 @@ const words = {
     saved: 'Contacts saved.', savedArticle: 'Question saved.', deleted: 'Question deleted.',
   },
   ru: {
-    title: 'Поддержка', contacts: 'Публичные контакты', contactsHelp: 'Видны до входа. Пустое поле скрывает контакт.',
+    title: 'Поддержка', variant: 'Вариант приложения', contacts: 'Публичные контакты', contactsHelp: 'Видны до входа. Пустое поле скрывает контакт.',
     email: 'Email поддержки', phone: 'Телефон поддержки', saveContacts: 'Сохранить контакты',
     faq: 'Частые вопросы', add: 'Добавить вопрос', edit: 'Изменить вопрос', remove: 'Удалить вопрос',
     removeConfirm: 'Удалить эту статью FAQ?', none: 'Вопросов пока нет.', published: 'Опубликован', draft: 'Черновик',
@@ -46,7 +48,9 @@ export function SupportWorkspace({ session, lang, onExpired }: {
 }) {
   const t = words[lang];
   const f = financeWords[lang];
-  const query = useQuery(session.id, (signal) => api('adminGetSupport', { signal }), onExpired);
+  const [variant, setVariant] = useState<SupportVariant>('a');
+  const variantQuery = { variant };
+  const query = useQuery(`${session.id}:${variant}`, (signal) => api('adminGetSupport', { signal, query: variantQuery }), onExpired);
   const [edit, setEdit] = useState<Edit>();
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<'saved' | 'savedArticle' | 'deleted'>();
@@ -58,6 +62,14 @@ export function SupportWorkspace({ session, lang, onExpired }: {
     mounted.current = true;
     return () => { mounted.current = false; };
   }, []);
+
+  function changeVariant(next: SupportVariant) {
+    if (operation.current) return;
+    setVariant(next);
+    setEdit(undefined);
+    setNotice(undefined);
+    setFailure(undefined);
+  }
 
   async function save(area: 'contacts' | 'article', complete: 'saved' | 'savedArticle' | 'deleted',
     write: () => Promise<unknown>) {
@@ -92,20 +104,20 @@ export function SupportWorkspace({ session, lang, onExpired }: {
     const data = new FormData(event.currentTarget);
     const body = { email: String(data.get('email') ?? '').trim() || null,
       phone: String(data.get('phone') ?? '').trim() || null, expectedVersion };
-    void save('contacts', 'saved', () => api('adminUpdateSupportContacts', { body, csrf: session.csrf }));
+    void save('contacts', 'saved', () => api('adminUpdateSupportContacts', { body, query: variantQuery, csrf: session.csrf }));
   }
 
   function submitArticle(fields: Body<'adminCreateFaq'>, current?: Article) {
     void save('article', 'savedArticle', () => current
       ? api('adminUpdateFaq', { body: { ...fields, expectedVersion: current.version },
-        params: { faqId: current.id }, csrf: session.csrf })
-      : api('adminCreateFaq', { body: fields, csrf: session.csrf }));
+        params: { faqId: current.id }, query: variantQuery, csrf: session.csrf })
+      : api('adminCreateFaq', { body: fields, query: variantQuery, csrf: session.csrf }));
   }
 
   function removeArticle(entry: Article) {
     if (!window.confirm(t.removeConfirm)) return;
     void save('article', 'deleted', () => api('adminDeleteFaq', {
-      params: { faqId: entry.id }, query: { expectedVersion: String(entry.version) }, csrf: session.csrf,
+      params: { faqId: entry.id }, query: { ...variantQuery, expectedVersion: String(entry.version) }, csrf: session.csrf,
     }));
   }
 
@@ -124,14 +136,20 @@ export function SupportWorkspace({ session, lang, onExpired }: {
   const position = Math.min(2147483647, (current?.faq.at(-1)?.position ?? 0) + 10);
 
   return <section className="support-workspace" data-testid="admin-support">
-    <h1>{t.title}</h1>
+    <div className="finance-section-heading">
+      <h1>{t.title}</h1>
+      <label className="finance-fields">{t.variant}<select value={variant} disabled={busy} data-testid="admin-support-variant"
+        onChange={(event) => changeVariant(event.target.value as SupportVariant)}>
+        {supportVariants.map((item) => <option key={item} value={item}>{variantNames[item]}</option>)}
+      </select></label>
+    </div>
     {notice && <p className="finance-notice" role="status">{t[notice]}</p>}
     {query.error && <Failure code={query.error} lang={lang} retry={query.reload} />}
     {!current && !query.error && <p className="muted" role="status">{f.loading}</p>}
     {current && <>
       <section className="support-settings" aria-label={t.contacts}>
         <div><h2>{t.contacts}</h2><p className="muted">{t.contactsHelp}</p></div>
-        <form className="support-panel" key={current.contacts.version} data-testid="admin-support-contacts"
+        <form className="support-panel" key={`${variant}:${current.contacts.version}`} data-testid="admin-support-contacts"
           onSubmit={(event) => submitContacts(event, current.contacts.version)}>
           <fieldset className="finance-fields" disabled={busy}>
             <LabeledInput label={t.email} name="email" type="email" maxLength={254} defaultValue={current.contacts.email ?? ''} />

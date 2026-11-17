@@ -7,7 +7,12 @@ import { retryFinanceWrite, runCommand } from './commands.ts';
 import type { ActorRole, WithCommandAccess } from './commands.ts';
 import { audit, one, rows } from './db.ts';
 import type { Db, Tx } from './db.ts';
+import { nextDepositPeriod } from './deposit-calendar.ts';
+import {
+  decideDepositInterest, depositInterestPreview, planDepositInterest, readDepositAccount, settleDepositInterest,
+} from './deposit-interest.ts';
 import { AccessError } from './errors.ts';
+import { maxMovementMinor as maxMinor, postedMovementsFor } from './ledger.ts';
 import { normalizeTransactionSource, transactionSourceFields } from './transaction-source.ts';
 import {
   checkScheduleForArchive, readAccountScheduleDates, recordReconciliationSkips, recordScheduleFailure, scheduleSelectionFingerprint,
@@ -43,13 +48,8 @@ type AccountCard = Result<'createAccountCard'>;
 type CardDetails = Pick<AccountCard, 'cardId' | 'name' | 'appearance' | 'lastFour' | 'network'>;
 type CardPreview = Result<'listAccounts'>['cardPreviews'][number];
 type CardParams = Params<'updateAccountCard'>;
-const maxMinor = 9223372036854775807n;
-const minMinor = -9223372036854775808n;
+const minMinor = -maxMinor - 1n;
 
-const postedMovementsFor = (accountId: SQL) => sql`FROM movements m
-  JOIN transactions t ON t.id = m.transaction_id AND t.current_version = m.transaction_version
-  JOIN transaction_versions v ON v.transaction_id = m.transaction_id AND v.version = m.transaction_version
-  WHERE m.account_id = ${accountId} AND v.status = 'posted' AND t.deleted_at IS NULL`;
 const currentPostedMovements = postedMovementsFor(sql`a.id`);
 const accountBalanceMinor = sql`a.opening_balance_minor + COALESCE((
   SELECT SUM(m.amount_minor) ${currentPostedMovements}
@@ -281,6 +281,10 @@ export function updateAccountStartDate(withAccess: WithCommandAccess, accountId:
     if (startDate > await profileDate(tx, userId, now) || (account.maturity_date && startDate > account.maturity_date)) {
       throw new AccessError(400, 'INVALID_REQUEST');
     }
+    if (account.maturity_date && await one(tx, sql`SELECT account_id FROM deposit_interest_periods
+      WHERE account_id = ${accountId} LIMIT 1`)) {
+      throw new AccessError(409, 'DEPOSIT_INTEREST_STARTED');
+    }
 
     // Account and owner locks serialize this check with operations, reconciliation, and schedule writes.
     if (startDate > account.start_date) {
@@ -295,7 +299,10 @@ export function updateAccountStartDate(withAccess: WithCommandAccess, accountId:
       if (conflict?.found) throw new AccessError(409, 'ACCOUNT_START_DATE_CONFLICT');
     }
 
-    await tx.execute(sql`UPDATE accounts SET start_date = ${startDate}, version = version + 1 WHERE id = ${accountId}`);
+    const interest = account.maturity_date ? nextDepositPeriod(startDate, account.maturity_date) : null;
+    await tx.execute(sql`UPDATE accounts SET start_date = ${startDate}, version = version + 1,
+      next_interest_date = ${interest?.date ?? null}, interest_review_before = ${interest ? now : null}
+      WHERE id = ${accountId}`);
     const reason = 'reason' in input ? input.reason : undefined;
     await audit(tx, now, reason === undefined ? 'user' : 'admin', 'finance.account.start_date_changed', actorId, userId, accountId,
       { from: account.start_date, to: startDate, ...(reason !== undefined && { reason }) });
@@ -318,7 +325,9 @@ export function setAccountArchived(withAccess: WithCommandAccess, accountId: str
     }
 
     const accountVersion = account.version + 1;
-    await tx.execute(sql`UPDATE accounts SET archived = ${archived}, version = ${accountVersion} WHERE id = ${accountId}`);
+    await tx.execute(sql`UPDATE accounts SET archived = ${archived}, version = ${accountVersion},
+      interest_review_before = CASE WHEN ${archived} = FALSE AND next_interest_date IS NOT NULL THEN ${now}
+        ELSE interest_review_before END WHERE id = ${accountId}`);
     await audit(tx, now, actorRole, archived ? 'finance.account.archived' : 'finance.account.restored', actorId, userId, accountId,
       { from: String(account.version), to: String(accountVersion) });
     return { accountId, accountVersion, archived, balanceMinor };
@@ -493,10 +502,12 @@ export function createAccount(withAccess: WithCommandAccess, recoveryVersion: st
       }
 
       const accountId = randomUUID();
+      const interest = maturityDate ? nextDepositPeriod(startDate, maturityDate) : null;
       await tx.execute(sql`INSERT INTO accounts
-        (id, user_id, name, currency, start_date, opening_balance_minor, kind, annual_rate_percent, maturity_date)
+        (id, user_id, name, currency, start_date, opening_balance_minor, kind, annual_rate_percent, maturity_date,
+          next_interest_date, interest_review_before)
         VALUES (${accountId}, ${userId}, ${name}, ${currency}, ${startDate}, ${amount.toString()},
-          ${kind}, ${annualRatePercent}, ${maturityDate})`);
+          ${kind}, ${annualRatePercent}, ${maturityDate}, ${interest?.date ?? null}, ${interest ? now : null})`);
       await audit(tx, now, actorRole, 'finance.account.created', actorId, userId, accountId,
         { from: '0', to: '1', ...(reason !== undefined && { reason }) });
       return getAccountBalance(tx, userId, accountId);
@@ -522,7 +533,7 @@ async function insertVersion(tx: Tx, transactionId: string, version: number, now
 }
 
 async function postTransaction(tx: Tx, userId: string, now: number, input: Revision, movements: Movement[],
-  transactionSource: string | null = null, origin: 'manual' | 'schedule' = 'manual',
+  transactionSource: string | null = null, origin: 'manual' | 'schedule' | 'depositInterest' = 'manual',
 ) {
   const { type } = input;
   const transactionId = randomUUID();
@@ -532,7 +543,7 @@ async function postTransaction(tx: Tx, userId: string, now: number, input: Revis
   for (const { accountId } of movements) {
     await updateAccountForMovement(tx, accountId, input.date);
   }
-  const automatic = origin === 'schedule';
+  const automatic = origin !== 'manual';
   await audit(tx, now, automatic ? 'operator' : 'user', `${type}.recorded`, automatic ? null : userId,
     userId, transactionId, { from: '0', to: '1' });
   return { transactionId, transactionVersion: 1 };
@@ -574,7 +585,7 @@ async function transactionMovements(tx: Tx, userId: string, now: number, input: 
   return [{ accountId, amount: type === 'income' ? amount : -amount }];
 }
 
-function requireActiveAccounts(accounts: Iterable<LockedAccount>) {
+function requireActiveAccounts(accounts: Iterable<{ archived: number }>) {
   for (const account of accounts) {
     if (account.archived) throw new AccessError(409, 'ACCOUNT_UNAVAILABLE');
   }
@@ -628,12 +639,12 @@ export function recordTransaction(withAccess: WithCommandAccess, recoveryVersion
   });
 }
 
-function withScheduleAccount<T>(db: Db, candidate: ScheduleCandidate, clock: () => number,
+function withWorkerAccount<T>(db: Db, candidate: { userId: string; accountId: string }, clock: () => number,
   action: (tx: Tx, account: LockedAccount, now: number) => Promise<T>,
 ) {
   return retryFinanceWrite(() => db.transaction(async (tx) => {
     const { userId, accountId } = candidate;
-    // The owner's login status does not affect the schedule.
+    // Background ledger writes follow the same lock order as interactive writes.
     if (!await one(tx, sql`SELECT id FROM users WHERE id = ${userId} FOR UPDATE`)) return;
     const account = await findAccountForUpdate(tx, userId, accountId);
     if (!account) return;
@@ -643,7 +654,7 @@ function withScheduleAccount<T>(db: Db, candidate: ScheduleCandidate, clock: () 
 
 export function processScheduleDate(db: Db, candidate: ScheduleCandidate, clock = Date.now) {
   const { userId, accountId } = candidate;
-  return withScheduleAccount(db, candidate, clock, (tx, account, now) =>
+  return withWorkerAccount(db, candidate, clock, (tx, account, now) =>
     settleScheduleDate(tx, candidate, now, Boolean(account.archived), async (date) => {
       const input: Revision = { type: date.kind, date: date.date, accountId, amountMinor: date.amountMinor,
         categoryId: date.categoryId, comment: date.comment ?? undefined };
@@ -656,8 +667,63 @@ export function processScheduleDate(db: Db, candidate: ScheduleCandidate, clock 
 export function recordScheduleDateFailure(db: Db, candidate: ScheduleCandidate, errorCode: ScheduleFailureCode,
   expectedAttempts: number, clock = Date.now,
 ) {
-  return withScheduleAccount(db, candidate, clock, (tx, _account, now) =>
+  return withWorkerAccount(db, candidate, clock, (tx, _account, now) =>
     recordScheduleFailure(tx, candidate, now, errorCode, expectedAttempts));
+}
+
+export async function previewDepositInterest(tx: Tx, userId: string, accountId: string, now: number) {
+  const account = await readDepositAccount(tx, userId, accountId);
+  if (!account) throw new AccessError(404, 'NOT_FOUND');
+  requireActiveAccounts([account]);
+  const plan = await planDepositInterest(tx, userId, account, now);
+  const { balanceMinor } = await getAccountBalance(tx, userId, accountId);
+  return depositInterestPreview(account, balanceMinor, plan);
+}
+
+function postDepositInterest(tx: Tx, userId: string, accountId: string, account: LockedAccount, now: number) {
+  return async (date: string, amountMinor: string) => {
+    const input: Revision = { type: 'income', accountId, date, amountMinor, categoryId: 'deposit-interest' };
+    const movements = await transactionMovements(tx, userId, now, input, new Map([[accountId, account]]), date);
+    return (await postTransaction(tx, userId, now, input, movements, null, 'depositInterest')).transactionId;
+  };
+}
+
+export function applyDepositInterest(withAccess: WithCommandAccess, recoveryVersion: string, accountId: string,
+  { idempotencyKey, previewId, decision }: Body<'applyDepositInterest'>,
+) {
+  const sourceId = decision?.action === 'useTransaction' ? decision.transactionId
+    : decision?.action === 'useAdjustment' ? decision.adjustmentId : null;
+  return runCommand<Result<'applyDepositInterest'>>(withAccess, 'deposit.interest.apply', recoveryVersion, idempotencyKey,
+    [accountId], [previewId, decision?.action ?? null, sourceId], async (tx, userId, now, apply, actorId) => {
+      const locked = await lockAccount(tx, userId, accountId);
+      return apply(async () => {
+        requireActiveAccounts([locked]);
+        const account = await readDepositAccount(tx, userId, accountId);
+        if (!account) throw new AccessError(404, 'NOT_FOUND');
+        const plan = await planDepositInterest(tx, userId, account, now);
+        const { balanceMinor } = await getAccountBalance(tx, userId, accountId);
+        if (depositInterestPreview(account, balanceMinor, plan).previewId !== previewId) {
+          throw new AccessError(409, 'VERSION_CONFLICT');
+        }
+        const settlements = decideDepositInterest(plan, decision);
+        if (!settlements.length) throw new AccessError(400, 'INVALID_REQUEST');
+        await settleDepositInterest(tx, userId, account, now, settlements,
+          postDepositInterest(tx, userId, accountId, locked, now), actorId);
+        return { ...await getTransactionAccount(tx, userId, accountId), settledPeriods: settlements.length };
+      });
+    });
+}
+
+export function processDepositInterest(db: Db, candidate: { userId: string; accountId: string }, clock = Date.now) {
+  const { userId, accountId } = candidate;
+  return withWorkerAccount(db, candidate, clock, async (tx, locked, now) => {
+    if (locked.archived) return 0;
+    const account = await readDepositAccount(tx, userId, accountId);
+    if (!account) return 0;
+    const { settlements } = await planDepositInterest(tx, userId, account, now, true);
+    await settleDepositInterest(tx, userId, account, now, settlements, postDepositInterest(tx, userId, accountId, locked, now));
+    return settlements.length;
+  });
 }
 
 export async function listTransactionVersions(tx: Tx, userId: string, transactionId: string): Promise<TransactionHistory> {

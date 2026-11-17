@@ -11,6 +11,7 @@ import * as Capture from 'expo-screen-capture';
 import type { Language, Result } from '@teta/contracts';
 import { AccessCheckScreen } from './access-check-screen';
 import { ApiError, request } from './api';
+import { isComaBank } from './app-variant';
 import { copy } from './copy';
 import type { FinanceAccess } from './finance-commands';
 import { dateInTimeZone } from './finance-format';
@@ -31,7 +32,7 @@ type ActivationInput = ComponentRef<typeof TextInput>;
 const AccessContext = createContext<{
   access: FinanceAccess | null;
   lang: Language;
-  settings: ReactNode;
+  renderSettings: (financeLinks?: ReactNode) => ReactNode;
   settingsBusy: boolean;
   clearSettingsDraft: () => void;
   restoreSettings: boolean;
@@ -578,7 +579,8 @@ export function AccessProvider({ children }: { children: ReactNode }) {
         submitBehavior={next ? 'submit' : 'blurAndSubmit'}
         onSubmitEditing={next ? () => next.current?.focus() : undefined}
         secureTextEntry={numeric} maxLength={numeric ? 4 : undefined}
-        keyboardType={numeric ? 'number-pad' : email ? 'email-address' : 'default'} />
+        keyboardType={numeric ? 'number-pad' : email ? 'email-address' : 'default'}
+        keyboardAppearance={isComaBank ? 'dark' : undefined} />
     </View>
   );
 
@@ -594,7 +596,8 @@ export function AccessProvider({ children }: { children: ReactNode }) {
     setMode(next);
   }
 
-  const settings = access && <SettingsScreen lang={lang} profile={access.profile} busy={busy} languageError={languageError}
+  const renderSettings = (financeLinks?: ReactNode) => access && <SettingsScreen lang={lang} profile={access.profile}
+    financeLinks={financeLinks} busy={busy} languageError={languageError}
     zoneEditing={timeZoneDraft !== null}
     biometricsEnabled={enabled} onLanguage={selectLanguage}
     onTimeZone={openTimeZonePicker}
@@ -645,7 +648,7 @@ export function AccessProvider({ children }: { children: ReactNode }) {
       keyboardDismissMode={showsActivationForm ? 'none' : 'on-drag'}
       keyboardShouldPersistTaps="handled" contentContainerStyle={[styles.page, { paddingBottom: styles.page.padding + bottom }]}>
       <View style={styles.header}>
-        <FinanceBrand title={t.appName} />
+        <FinanceBrand title={t.appName} prominent={isComaBank} />
         <Pressable accessibilityRole="button" accessibilityLabel={lang === 'en' ? 'Русский' : 'English'}
           onPress={switchLanguage}>
           <Text style={styles.language}>{lang === 'en' ? 'RU' : 'EN'}</Text>
@@ -675,7 +678,7 @@ export function AccessProvider({ children }: { children: ReactNode }) {
     {showsKeyboardToolbar && <KeyboardToolbar doneText={t.done} />}
   </SafeAreaView>;
 
-  return <AccessContext value={{ access, lang, settings, settingsBusy: busy, clearSettingsDraft,
+  return <AccessContext value={{ access, lang, renderSettings, settingsBusy: busy, clearSettingsDraft,
     restoreSettings: settingsFocused.current, setSettingsFocused: (focused) => { settingsFocused.current = focused; },
     runProfilePhotoPicker, startupReady, setSplashHidden, showsUnlockScreen, timeZoneSuggestion, signedOut }}>
     {children}
@@ -705,7 +708,7 @@ function errorCode(error: unknown) {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: palette.panel },
+  safe: { flex: 1, backgroundColor: isComaBank ? palette.ground : palette.panel },
   page: { width: '100%', maxWidth: 540, alignSelf: 'center', padding: 24, gap: 12 },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 26 },
   language: { color: palette.accent, padding: 12, minHeight: 44, fontWeight: '700' },
@@ -720,5 +723,5 @@ const styles = StyleSheet.create({
   disabled: { opacity: 0.55 }, notice: { color: palette.danger, fontSize: 15 },
   support: { paddingVertical: 12, borderTopWidth: 1, borderColor: palette.line },
   zoneSuggestion: { gap: 8, padding: 12, backgroundColor: palette.panel, borderRadius: 12, borderWidth: 1, borderColor: palette.line },
-  settingsNotice: { paddingHorizontal: 12, paddingBottom: 12 },
+  settingsNotice: { paddingHorizontal: isComaBank ? 0 : 12, paddingBottom: 12 },
 });

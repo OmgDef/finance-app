@@ -4,6 +4,7 @@ import { Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from '
 import { KeyboardController } from 'react-native-keyboard-controller';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import type { Language } from '@teta/contracts';
+import { isComaBank } from './app-variant';
 import { copy } from './copy';
 import { financeCopy } from './finance-copy';
 import { dateForPicker, dateFromPicker, formatFinancialDate } from './finance-format';
@@ -93,7 +94,7 @@ export function FinanceDateField({ title, lang, value, today, onChange, onClear,
             <SafeAreaView edges={['bottom']} style={layout.sheetContent}>
               <Text style={styles.section} accessibilityRole="header">{title}</Text>
               <DateTimePicker mode="date" display="inline" locale={lang === 'ru' ? 'ru-RU' : 'en-US'}
-                style={layout.calendar} themeVariant="light" accentColor={palette.accent}
+                style={layout.calendar} themeVariant={isComaBank ? 'dark' : 'light'} accentColor={palette.accent}
                 value={dateForPicker(clamp(draft), true)}
                 minimumDate={new Date(min + 'T00:00:00Z')} maximumDate={new Date(max + 'T23:59:59.999Z')} timeZoneName="UTC"
                 onValueChange={(_, date) => setDraft(dateFromPicker(date, true))} />
@@ -117,7 +118,7 @@ const layout = StyleSheet.create({
   date: { color: palette.ink, fontSize: 17, fontVariant: ['tabular-nums'], flexShrink: 1 },
   placeholder: { color: palette.muted },
   modal: { flex: 1, alignItems: 'center', justifyContent: 'flex-end' },
-  backdrop: { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(23, 38, 58, 0.35)' },
+  backdrop: { ...StyleSheet.absoluteFill, backgroundColor: palette.scrim },
   sheet: { width: '100%', maxWidth: 420, maxHeight: '90%', backgroundColor: palette.panel,
     borderTopLeftRadius: 20, borderTopRightRadius: 20 },
   sheetContent: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 12, gap: 12 },

@@ -2,9 +2,10 @@ import { useEffect, useRef } from 'react';
 import { AccessibilityInfo, Animated, Easing, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { Language } from '@teta/contracts';
+import { isComaBank } from './app-variant';
 import { copy } from './copy';
 import { FinanceIcon } from './finance-icon';
-import { FinanceAlert, FinanceButton, FinanceMark, palette } from './finance-ui';
+import { FinanceAlert, FinanceBrand, FinanceButton, FinanceMark, palette } from './finance-ui';
 import { SupportScreen } from './support-screen';
 
 function AccessCheckMark({ pending }: { pending: boolean }) {
@@ -61,7 +62,7 @@ export function AccessCheckScreen({ lang, languageError, onLanguage, supportOpen
   return <SafeAreaView style={styles.safe} testID="access-check-screen">
     <ScrollView contentInsetAdjustmentBehavior="never" contentContainerStyle={styles.page}>
       <View style={styles.header}>
-        <Text style={styles.brand}>{t.appName}</Text>
+        {isComaBank ? <FinanceBrand title={t.appName} prominent /> : <Text style={styles.brand}>{t.appName}</Text>}
         <Pressable accessibilityRole="button" accessibilityLabel={lang === 'en' ? 'Русский' : 'English'}
           onPress={onLanguage} style={({ pressed }) => [styles.languageButton, pressed && styles.pressed]}>
           <Text style={styles.language}>{lang === 'en' ? 'RU' : 'EN'}</Text>

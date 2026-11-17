@@ -1,7 +1,7 @@
 import Fastify, { LogController } from 'fastify';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { routes, errorSchema } from '@teta/contracts';
-import type { AccountStatementQuery, AuditQuery, Body, Params, Route, Result, StatisticsQuery } from '@teta/contracts';
+import type { AccountStatementQuery, AuditQuery, Body, Language, Params, Route, Result, StatisticsQuery, SupportVariant } from '@teta/contracts';
 import { sql } from 'drizzle-orm';
 import { listAccountHistory } from './account-history.ts';
 import { renderAccountStatement } from './account-statement-pdf.ts';
@@ -16,9 +16,9 @@ import type { Db } from './db.ts';
 import { AccessError, sessionExpired } from './errors.ts';
 import { exchangeRates } from './exchange-rates.ts';
 import {
-  changeTransaction, createAccount, createAccountCard, deleteAccount, deleteAccountCard, deleteScheduleRule, getAccountBalance,
+  applyDepositInterest, changeTransaction, createAccount, createAccountCard, deleteAccount, deleteAccountCard, deleteScheduleRule, getAccountBalance,
   getAccountBalanceSeries, getCurrencySummary, listAccountCards, listAccounts, listBalanceAdjustments, listCategories,
-  listMobileAccounts, listTransactionVersions, previewBalanceAdjustment,
+  listMobileAccounts, listTransactionVersions, previewBalanceAdjustment, previewDepositInterest,
   previewTransactionChange, readAccountStatement, reconcileAccountBalance, recordTransaction, renameAccount, setAccountArchived, updateAccountCard,
   updateAccountStartDate,
 } from './finance.ts';
@@ -36,6 +36,9 @@ import { adminSupport, createFaq, deleteFaq, publicSupport, updateFaq, updateSup
 const ok = { ok: true } as const;
 const tokenPattern = /^[a-f0-9]{64}$/;
 type OccurrenceQuery = { fromDate: string; throughDate: string; accountId?: string; ruleId?: string };
+function supportVariant(request: FastifyRequest): SupportVariant {
+  return (request.query as { variant?: SupportVariant }).variant ?? 'a';
+}
 function readCookie(request: FastifyRequest, name: string) {
   const prefix = name + '=';
   const value = request.headers.cookie?.split(';').map((item) => item.trim())
@@ -139,7 +142,7 @@ export function buildApp(config: Config, db: Db, clock = Date.now, logger = fals
   }
 
   add('health', async () => { await db.execute(sql`SELECT 1`); return ok; });
-  add('support', async (request) => publicSupport(db, (request.query as { lang?: 'en' | 'ru' }).lang ?? 'en'));
+  add('support', async (request) => publicSupport(db, supportVariant(request), (request.query as { lang?: Language }).lang ?? 'en'));
   add('activate', async (request) => ({ ...await mobile.activate(request.body, request.ip), recoveryVersion: config.recoveryVersion }));
   add('unlock', async (request) => ({ ...await mobile.unlock(request.body, request.ip), recoveryVersion: config.recoveryVersion }));
   add('me', async (request) => ({ ...await mobile.profile(bearer(request)), recoveryVersion: config.recoveryVersion }));
@@ -163,6 +166,10 @@ export function buildApp(config: Config, db: Db, clock = Date.now, logger = fals
     getCurrencySummary(tx, user.id)));
   add('getAccountBalance', async (request) => mobile.withSession(bearer(request), (tx, user) =>
     getAccountBalance(tx, user.id, request.params.accountId)));
+  add('previewDepositInterest', async (request) => mobile.withSession(bearer(request), (tx, user, _device, now) =>
+    previewDepositInterest(tx, user.id, request.params.accountId, now)));
+  add('applyDepositInterest', async (request) =>
+    applyDepositInterest(mobileCommandAccess(request), config.recoveryVersion, request.params.accountId, request.body));
   add('getAccountBalanceSeries', async (request) => mobile.withSession(bearer(request), (tx, user, _device, now) =>
     getAccountBalanceSeries(tx, user.id, request.params.accountId, now)));
   add('renameAccount', async (request) => renameAccount(mobileCommandAccess(request), request.params.accountId, request.body));
@@ -354,14 +361,15 @@ export function buildApp(config: Config, db: Db, clock = Date.now, logger = fals
   add('adminReviewRecoveredUser', async (request) => adminSession(request, (tx, { id }, now) =>
     mobile.reviewRecoveredUser(tx, id, request.params.userId, request.body, now)));
   add('adminListAudit', async (request) => adminSession(request, (tx) => listAuditEvents(tx, request.query as AuditQuery)));
-  add('adminGetSupport', async (request) => adminSession(request, adminSupport));
+  add('adminGetSupport', async (request) => adminSession(request, (tx) => adminSupport(tx, supportVariant(request))));
   add('adminUpdateSupportContacts', async (request) =>
-    adminSession(request, (tx, { id }, now) => updateSupportContacts(tx, id, now, request.body)));
-  add('adminCreateFaq', async (request) => adminSession(request, (tx, { id }, now) => createFaq(tx, id, now, request.body)));
+    adminSession(request, (tx, { id }, now) => updateSupportContacts(tx, supportVariant(request), id, now, request.body)));
+  add('adminCreateFaq', async (request) =>
+    adminSession(request, (tx, { id }, now) => createFaq(tx, supportVariant(request), id, now, request.body)));
   add('adminUpdateFaq', async (request) =>
-    adminSession(request, (tx, { id }, now) => updateFaq(tx, id, now, request.params.faqId, request.body)));
+    adminSession(request, (tx, { id }, now) => updateFaq(tx, supportVariant(request), id, now, request.params.faqId, request.body)));
   add('adminDeleteFaq', async (request) => adminSession(request, async (tx, { id }, now) => {
-    await deleteFaq(tx, id, now, request.params.faqId, Number((request.query as { expectedVersion: string }).expectedVersion));
+    await deleteFaq(tx, supportVariant(request), id, now, request.params.faqId, Number((request.query as { expectedVersion: string }).expectedVersion));
     return ok;
   }));
   return app;

@@ -36,6 +36,7 @@ export const financeIconSources = {
   entertainment: require('../assets/icons/entertainment.png'),
   travel: require('../assets/icons/travel.png'),
   copy: require('../assets/icons/copy.png'),
+  statement: require('../assets/icons/statement.png'),
   refresh: require('../assets/icons/refresh.png'),
 } satisfies Record<string, ImageSourcePropType>;
 

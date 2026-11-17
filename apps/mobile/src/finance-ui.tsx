@@ -6,33 +6,32 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SafeAreaView as NativeTabsSafeAreaView } from 'react-native-screens/experimental';
 import { currencySymbol } from '@teta/contracts/money';
 import type { Currency } from '@teta/contracts/money';
-import { appBrand, appVariant } from './app-variant';
+import { appBrand, isComaBank } from './app-variant';
+import { comabankBackground } from './app-variants';
 import { FinanceIcon } from './finance-icon';
 import type { FinanceIconName } from './finance-icon';
 
-const isWallet = appVariant === 'b';
-
-export const palette = isWallet ? {
-  ground: '#F6F2E9', panel: '#FFFFFF', raised: '#EFEFE5', ink: '#20362E', muted: '#52645B',
-  line: '#DFE3D8', control: '#75887E', danger: '#A12F3A', accent: appBrand.brandColor, selected: '#E1EFE6',
-  positive: '#286648', balanceSurface: '#23483B', balanceMuted: '#C6DACD',
+export const palette = isComaBank ? {
+  ground: comabankBackground, panel: '#1B1A21', raised: '#24212C', ink: '#F6F4FA', muted: '#ACA8B9',
+  line: '#302E39', control: '#625D70', danger: '#F3A8B0', accent: appBrand.brandColor, selected: '#30253D',
+  positive: '#74D1AC', balanceSurface: '#1B1A21', balanceMuted: '#ACA8B9', scrim: 'rgba(0, 0, 0, 0.66)',
 } : {
   ground: '#F5F7FA', panel: '#FFFFFF', raised: '#EDF1F6', ink: '#17263A', muted: '#53647A',
   line: '#E2E8F0', control: '#8594A7', danger: '#AD343E', accent: appBrand.brandColor, selected: '#E9F1FF',
   positive: '#226349',
-  balanceSurface: '#191F29', balanceMuted: '#C0CAD8',
+  balanceSurface: '#191F29', balanceMuted: '#C0CAD8', scrim: 'rgba(23, 38, 58, 0.35)',
 };
 
 export function transactionAmountColor(amountMinor: string) {
   if (amountMinor === '0') return palette.ink;
-  return amountMinor.startsWith('-') ? palette.danger : palette.positive;
+  return amountMinor.startsWith('-') ? (isComaBank ? palette.ink : palette.danger) : palette.positive;
 }
 
 export function cardTextColor(color: string) {
   const channels = [1, 3, 5].map((offset) => parseInt(color.slice(offset, offset + 2), 16) / 255)
     .map((value) => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
   const luminance = 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
-  return luminance > 0.179 ? '#000000' : palette.panel;
+  return luminance > 0.179 ? '#000000' : '#FFFFFF';
 }
 
 export function FinanceScrollView({ children, nativeTab, ...props }: ComponentProps<typeof KeyboardAwareScrollView> & {
@@ -50,15 +49,15 @@ export function FinanceScrollView({ children, nativeTab, ...props }: ComponentPr
 }
 
 export function FinanceMark({ size = 29 }: { size?: number }) {
-  const source = isWallet ? require('../assets/app-icon/wallet/splash-logo.png') : require('../assets/theta.png');
-  return <Image source={source} style={[isWallet ? styles.walletMark : styles.brandMark, { width: size, height: size }]} accessible={false}
+  const source = isComaBank ? require('../assets/app-icon/wallet/splash-logo.png') : require('../assets/theta.png');
+  return <Image source={source} style={[!isComaBank && styles.brandMark, { width: size, height: size }]} accessible={false}
     importantForAccessibility="no" />;
 }
 
-export function FinanceBrand({ title }: { title: string }) {
+export function FinanceBrand({ title, prominent = false }: { title: string; prominent?: boolean }) {
   return <View style={styles.brand}>
     <FinanceMark />
-    <Text style={styles.brandTitle}>{title}</Text>
+    <Text style={[styles.brandTitle, prominent && styles.prominentBrandTitle]}>{title}</Text>
   </View>;
 }
 
@@ -81,6 +80,7 @@ export function FinanceField({ title, hint, currency, ...input }: TextInputProps
     autoCorrect={input.keyboardType ? false : undefined} spellCheck={input.keyboardType ? false : undefined}
     accessibilityLabel={unit ? `${title} (${unit})` : title}
     placeholder={input.placeholder ?? (unit ? '0' : undefined)} placeholderTextColor={palette.muted}
+    keyboardAppearance={isComaBank ? 'dark' : input.keyboardAppearance}
     style={unit ? styles.currencyInput : styles.input} selectionColor={palette.accent} />;
   return <View style={styles.field}>
     <Text style={styles.label}>{title}</Text>
@@ -120,16 +120,18 @@ const inputFrame = { minHeight: 48, paddingHorizontal: 12, borderRadius: 8, back
 const inputText = { color: palette.ink, fontSize: 17 };
 
 export const styles = StyleSheet.create({
-  page: { width: '100%', maxWidth: 540, alignSelf: 'center', paddingHorizontal: 18, paddingTop: 18, paddingBottom: 24, gap: 18 },
+  page: { width: '100%', maxWidth: 540, alignSelf: 'center', paddingHorizontal: isComaBank ? 20 : 18,
+    paddingTop: isComaBank ? 12 : 18, paddingBottom: 24, gap: 18 },
   brand: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1 },
   // The visible outline in theta.png is 234 × 250 within a square canvas.
   brandMark: { transform: [{ scaleY: 234 / 250 }] },
-  walletMark: { tintColor: palette.accent },
   brandTitle: { color: palette.ink, fontSize: 15, fontWeight: '700', flexShrink: 1 },
+  prominentBrandTitle: { fontSize: 21, letterSpacing: -0.6 },
   heading: { color: palette.ink, fontSize: 27, fontWeight: '700' },
-  section: { color: palette.ink, fontSize: 19, fontWeight: '700' },
+  section: { color: palette.ink, fontSize: isComaBank ? 17 : 19, fontWeight: '700' },
   groupTitle: { color: palette.ink, fontSize: 15, fontWeight: '600' },
-  surface: { backgroundColor: palette.panel, borderRadius: isWallet ? 20 : 12, borderWidth: 1, borderColor: palette.line },
+  surface: { backgroundColor: palette.panel, borderRadius: isComaBank ? 14 : 12,
+    borderWidth: isComaBank ? 0 : 1, borderColor: palette.line },
   title: { color: palette.ink, fontSize: 16, fontWeight: '600', flexShrink: 1 },
   label: { color: palette.ink, fontSize: 15 },
   meta: { color: palette.muted, fontSize: 14, flexShrink: 1 },

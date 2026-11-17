@@ -5,9 +5,10 @@ import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { Result } from '@teta/contracts';
 import { useAccessSession } from './access-session';
 import { ApiError, request } from './api';
+import { appBrand, isComaBank } from './app-variant';
 import type { FinanceAccess } from './finance-commands';
 import { FinanceIcon } from './finance-icon';
-import { palette } from './finance-ui';
+import { FinanceBrand, palette, styles } from './finance-ui';
 import { profileCopy } from './profile-copy';
 
 type Summary = Result<'getProfileSummary'>;
@@ -57,7 +58,7 @@ export function ProfileAvatar({ jpeg, initials, size, testID }: {
     {jpeg ? <Image source={{ uri: 'data:image/jpeg;base64,' + jpeg }} style={layout.image}
       testID={testID && testID + '-photo'} /> :
       initials ? <Text allowFontScaling={false} style={[layout.initials, { fontSize: size * 0.34 }]}>{initials}</Text> :
-        <FinanceIcon name="profile" color={palette.panel} size={size * 0.48} />}
+        <FinanceIcon name="profile" color={isComaBank ? palette.accent : palette.panel} size={size * 0.48} />}
   </View>;
 }
 
@@ -83,6 +84,14 @@ export function ProfileHeader({ focused, refresh }: { focused: boolean; refresh:
     void read(controller.signal);
     return () => controller.abort();
   }, [focused, refresh, access?.token]);
+  if (isComaBank) return <View style={layout.comabankHeader}>
+    <FinanceBrand title={appBrand.name[lang]} prominent />
+    <Pressable testID="profile-open" accessibilityRole="button" accessibilityHint={t.open}
+      accessibilityLabel={name} onPress={() => router.push('/profile')}
+      style={({ pressed }) => [layout.profileButton, pressed && styles.dimmed]}>
+      <ProfileAvatar size={40} initials={summary?.initials} jpeg={jpeg} />
+    </Pressable>
+  </View>;
   return <Pressable testID="profile-open" accessibilityRole="button" accessibilityHint={t.open}
     accessibilityLabel={name} onPress={() => router.push('/profile')}
     style={({ pressed }) => [layout.header, pressed && layout.headerPressed]}>
@@ -98,6 +107,8 @@ export function ProfileHeader({ focused, refresh }: { focused: boolean; refresh:
 }
 
 const layout = StyleSheet.create({
+  comabankHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  profileButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
   header: { flexDirection: 'row', alignItems: 'center', minHeight: 78, gap: 12, paddingHorizontal: 14,
     paddingVertical: 11, borderRadius: 18, backgroundColor: palette.panel, borderWidth: 1, borderColor: palette.line },
   headerPressed: { backgroundColor: palette.raised },
@@ -107,5 +118,5 @@ const layout = StyleSheet.create({
   detail: { fontSize: 13, color: palette.muted },
   avatar: { alignItems: 'center', justifyContent: 'center', backgroundColor: palette.balanceSurface, overflow: 'hidden' },
   image: { width: '100%', height: '100%' },
-  initials: { color: palette.panel, fontWeight: '700' },
+  initials: { color: isComaBank ? palette.accent : palette.panel, fontWeight: '700' },
 });

@@ -10,7 +10,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useAccessSession } from './access-session';
 import type { Language, Result } from '@teta/contracts';
 import { request } from './api';
-import { appVariant } from './app-variant';
+import { isComaBank } from './app-variant';
 import { copy } from './copy';
 import { AccountManagement } from './finance-account-management';
 import { AccountOverview } from './finance-account-overview';
@@ -18,6 +18,7 @@ import { CardDetails } from './finance-card-details';
 import { apiErrorCode, useFinanceCommand } from './finance-commands';
 import type { CommandResult, FinanceAccess, FinanceCommand, TransactionFields } from './finance-commands';
 import { financeCopy } from './finance-copy';
+import { DepositInterest, depositInterestCopy, depositInterestSummary } from './finance-deposit-interest';
 import type { FinanceCopyKey } from './finance-copy';
 import { BalanceCard, CashFlowCard, ExchangeRatesCard, OverviewAccountCard } from './finance-dashboard';
 import { formatFinancialDate, formatMoney, formatProfileMoment, formatRate, recentStatisticsPeriod } from './finance-format';
@@ -49,7 +50,7 @@ type Destination = { page: FinancePage; returnToOrigin?: boolean; dismissTo?: bo
   { deletedAccountId: string };
 type AccountNotice = { accountId: string; key: FinanceCopyKey };
 
-function localizedError(code: string, lang: Language, context?: 'reconcile' | 'schedule' | 'replace' | 'deleteAccount') {
+function localizedError(code: string, lang: Language, context?: 'reconcile' | 'schedule' | 'replace' | 'deleteAccount' | 'depositInterest') {
   const t = financeCopy[lang];
   const s = scheduleCopy[lang];
   switch (code) {
@@ -58,8 +59,11 @@ function localizedError(code: string, lang: Language, context?: 'reconcile' | 's
       : context === 'schedule' ? s.restoreAccount : t.unavailable;
     case 'NOT_FOUND': return t.unavailable;
     case 'IDEMPOTENCY_CONFLICT': return t.conflict;
-    case 'VERSION_CONFLICT': return context === 'replace' ? s.replacementChanged
-      : context === 'reconcile' || context === 'deleteAccount' ? t.accountVersionConflict : t.versionConflict;
+    case 'VERSION_CONFLICT': {
+      if (context === 'depositInterest') return depositInterestCopy[lang].changed;
+      if (context === 'replace') return s.replacementChanged;
+      return context === 'reconcile' || context === 'deleteAccount' ? t.accountVersionConflict : t.versionConflict;
+    }
     case 'SCHEDULE_DATES_PENDING': return t.reconcilePendingDates;
     case 'SCHEDULE_DATE_CONFLICT': return context === 'schedule' ? s.skipChanged : t.reconcileScheduleChanged;
     case 'SCHEDULE_REPLACEMENT_CONFLICT': return s.replacementChanged;
@@ -188,6 +192,10 @@ function useWorkspaceModel(access: FinanceAccess, lang: Language) {
       const path = financePath(page);
       if (current.pathname === path) setReceipt({ ...receipt, path });
       else setDestination({ page, returnToOrigin: current.pathname === path + '/edit', receipt });
+    } else if ('settledPeriods' in result) {
+      if (current.pathname === financePath({ name: 'depositInterest', accountId: result.accountId })) {
+        setReceipt({ ...receipt, path: current.pathname });
+      } else Alert.alert(depositInterestCopy[lang].saved);
     } else if ('accountId' in result) {
       const page: FinancePage = { name: kind === 'account.reconcile' ? 'manage' : 'history', accountId: result.accountId };
       const dismissTo = kind === 'account.reconcile' &&
@@ -351,6 +359,11 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
   const accountId = 'accountId' in page ? page.accountId : null;
   const account = accountId ? accounts?.find((entry) => entry.accountId === accountId) : undefined;
   const historyId = page.name === 'history' ? page.accountId : undefined;
+  const hasInterest = account && 'type' in account && account.type === 'deposit' && !account.archived;
+  const interestId = page.name === 'depositInterest' ? page.accountId : hasInterest ? historyId : undefined;
+  const interest = useFinanceRead(interestId, revision, access, (accountId) =>
+    request('previewDepositInterest', { token: access.token, params: { accountId } }), focused);
+  const interestCopy = depositInterestCopy[lang];
   const transactionId = 'transactionId' in page ? page.transactionId : undefined;
   const linkedCards = useFinanceRead(page.name === 'cardDetails' ? page.accountId : historyId, revision, access, (accountId) =>
     request('listAccountCards', { token: access.token, params: { accountId } }), focused);
@@ -373,12 +386,14 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
   const historyTitles = {
     opening: t.opening, adjustment: t.adjustment, expense: t.expenseEntry, income: t.incomeEntry, transfer: t.transfer,
   };
-  const transactionLabels = { expense: t.expense, income: t.income, transfer: t.newTransfer };
+  const transactionLabels = isComaBank ? historyTitles : { expense: t.expense, income: t.income, transfer: t.newTransfer };
   const commandLabels: Record<FinanceCommand, string> = {
     'account.create': t.addAccount, 'account.delete': t.deleteAccount,
-    'expense.record': t.expense, 'income.record': t.income, 'transfer.record': t.newTransfer,
+    'expense.record': transactionLabels.expense, 'income.record': transactionLabels.income,
+    'transfer.record': transactionLabels.transfer,
     'transaction.revise': t.editTransaction, 'transaction.void': t.voidTransaction,
     'account.reconcile': t.reconcileAccount,
+    'deposit.interest.apply': interestCopy.title,
     'schedule.skip': s.skip, 'schedule.replace': s.replace, 'schedule.delete': s.deleteRule,
   };
   const receiptLabels: Record<FinanceCommand, string> = {
@@ -386,6 +401,7 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
     'expense.record': t.expenseSaved, 'income.record': t.incomeSaved,
     'transfer.record': t.transferSaved, 'transaction.revise': t.revisionSaved, 'transaction.void': t.transactionVoided,
     'account.reconcile': t.reconciled,
+    'deposit.interest.apply': interestCopy.saved,
     'schedule.skip': s.dateSkipped, 'schedule.replace': s.ruleReplaced, 'schedule.delete': s.ruleDeleted,
   };
   const activeTransaction = transaction.data;
@@ -461,6 +477,7 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
       void monthlyActivity.load();
     }
     if (transactionId) void transaction.load();
+    if (interestId) void interest.load();
     if (page.name === 'schedule') setScheduleRefresh((signal) => signal + 1);
     if (page.name === 'statistics') statistics.refresh();
   }
@@ -496,6 +513,7 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
       case 'addAccount': return t.addAccount;
       case 'manage': return t.manageAccount;
       case 'reconcile': return t.reconcileAccount;
+      case 'depositInterest': return interestCopy.title;
       case 'statement': return statementCopy[lang].title;
       case 'history': return account?.name ?? t.history;
       case 'accountEditor': {
@@ -527,16 +545,27 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
   }
 
   if (page.name === 'history') {
+    const onStatement = () => go({ name: 'statement', accountId: page.accountId });
+    const statementTitle = statementCopy[lang].title;
     return <SafeAreaView style={layout.container} edges={['left', 'right']}>
-      <Stack.Screen options={{ title: screenTitle(), gestureEnabled: !writing }} />
+      <Stack.Screen options={{
+        title: screenTitle(), gestureEnabled: !writing,
+        headerRight: isComaBank && account ? () => <Pressable accessibilityRole="button" accessibilityLabel={statementTitle}
+          onPress={onStatement} testID="finance-detail-statement"
+          style={({ pressed }) => [layout.headerIconButton, pressed && styles.dimmed]}>
+          <FinanceIcon name="statement" color={palette.accent} size={22} />
+        </Pressable> : undefined,
+      }} />
       <AccountOverview key={page.accountId} account={account} depositTerms={account ? depositTerms(account, lang) : ''}
+        interestSummary={interest.data && depositInterestSummary(interest.data, lang)}
+        onInterest={hasInterest ? () => go({ name: 'depositInterest', accountId: page.accountId }) : undefined}
         lang={lang} categories={categories} month={monthlyActivity.data?.fromDate.slice(0, 7) ?? month}
         cards={linkedCards.data?.cards} cardsError={!!linkedCards.error}
         balanceSeries={balanceSeries.data} balanceSeriesError={!!balanceSeries.error} monthlyActivity={monthlyActivity.data}
         totalsError={!!monthlyActivity.error} history={history.data} historyBusy={history.busy} historyError={!!history.error}
         accountError={listError ? t.accountOverviewError : accounts && !account ? t.unavailable : undefined}
         refreshing={refreshing} onRefresh={refresh}
-        statementTitle={statementCopy[lang].title} onStatement={() => go({ name: 'statement', accountId: page.accountId })}
+        statementTitle={statementTitle} onStatement={onStatement}
         created={receipt?.command === 'account.create'}
         onOpenCard={(cardId) => go({ name: 'cardDetails', accountId: page.accountId, cardId })}
         onReloadCards={() => void linkedCards.load()}
@@ -561,7 +590,7 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
         ? () => <Pressable accessibilityRole="button" accessibilityLabel={t.transactionActions}
           disabled={blocked || transaction.busy || transactionChanged} testID="finance-transaction-actions"
           onPress={() => showTransactionActions(page.transactionId, activeTransaction.transactionVersion)}
-          style={({ pressed }) => [layout.transactionActions, (pressed || blocked || transaction.busy || transactionChanged) && styles.dimmed]}>
+          style={({ pressed }) => [layout.headerIconButton, (pressed || blocked || transaction.busy || transactionChanged) && styles.dimmed]}>
           <Text accessible={false} style={layout.transactionActionsIcon}>⋯</Text>
         </Pressable> : undefined,
     }} />}
@@ -571,11 +600,15 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
       keyboardDismissMode={isForm ? 'none' : 'on-drag'}
       keyboardShouldPersistTaps="handled"
       refreshControl={financeTab || page.name === 'archive' || page.name === 'accountSettings' || page.name === 'transaction' ||
+        page.name === 'depositInterest' ||
         (page.name === 'schedule' && !page.editor && !page.skipDate)
         ? <RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={palette.accent} colors={[palette.accent]} />
         : undefined}>
-      {page.name === 'statistics' && <Text accessibilityRole="header" style={styles.heading}>{statisticsCopy[lang].title}</Text>}
-      {showingSupport && <Text accessibilityRole="header" style={styles.heading}>{copy[lang].help}</Text>}
+      {isComaBank && (financeTab || showingSupport) && <ProfileHeader focused={focused} refresh={profileRefresh} />}
+      {!isComaBank && page.name === 'statistics' && <Text accessibilityRole="header" style={styles.heading}>{statisticsCopy[lang].title}</Text>}
+      {showingSupport && <Text accessibilityRole="header" style={styles.heading}>
+        {isComaBank ? copy[lang].support : copy[lang].help}
+      </Text>}
       {showingSupport && focused && <SupportScreen lang={lang} showHeading={false} />}
       {!showingSupport && <>
       {command.reading && <View style={layout.panel}>
@@ -607,7 +640,8 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
       {!command.reading && command.error !== '' &&
         <FinanceAlert testID="finance-command-message">{localizedError(command.error, lang,
           page.name === 'schedule' ? page.editor === 'replace' ? 'replace' : 'schedule'
-            : page.name === 'manage' ? 'deleteAccount' : reconciling ? 'reconcile' : undefined)}</FinanceAlert>}
+            : page.name === 'manage' ? 'deleteAccount' : reconciling ? 'reconcile'
+              : page.name === 'depositInterest' ? 'depositInterest' : undefined)}</FinanceAlert>}
       {transactionId && transactionChanged && <FinanceButton title={t.reloadTransaction}
         onPress={() => {
           command.clearError();
@@ -682,21 +716,19 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
       {!accounts && accountsLoading && <ActivityIndicator color={palette.accent} accessibilityLabel={t.loading} />}
       </>}
       {page.name === 'products' && <>
+        {isComaBank && <Text accessibilityRole="header" style={styles.heading}>{t.accounts}</Text>}
         {timeZoneSuggestion}
-        <ProfileHeader focused={focused} refresh={profileRefresh} />
+        {!isComaBank && <ProfileHeader focused={focused} refresh={profileRefresh} />}
         {accounts && <BalanceCard accounts={activeAccounts} lang={lang} />}
-        {appVariant === 'b' && activeAccounts.length > 0 && <FinanceButton title={t.expense} icon="expense" primary
-          disabled={blocked} onPress={() => go({ name: 'record', kind: 'expense', accountId: null })}
-          testID="finance-wallet-expense" />}
         {accounts && <View style={layout.section}>
-          <Text accessibilityRole="header" style={styles.section}>{t.myAccounts}</Text>
-          {activeAccounts.length ? <View style={[styles.surface, layout.accountGroup]}>
+          <Text accessibilityRole="header" style={styles.section}>{isComaBank ? t.accountsAndCards : t.myAccounts}</Text>
+          {activeAccounts.length ? <View style={[!isComaBank && styles.surface, layout.accountGroup]}>
             {activeAccounts.map((entry, index) => <OverviewAccountCard key={entry.accountId}
               account={entry} preview={previewsByAccount.get(entry.accountId)} lang={lang} divider={index > 0}
               onOpen={() => go({ name: 'history', accountId: entry.accountId })} />)}
           </View>
             : <Text style={styles.meta}>{t.addAccountInSettings}</Text>}
-          {archivedAccounts.length > 0 && <Pressable accessibilityRole="button" onPress={() => go({ name: 'archive' })}
+          {!isComaBank && archivedAccounts.length > 0 && <Pressable accessibilityRole="button" onPress={() => go({ name: 'archive' })}
             style={({ pressed }) => [layout.archiveLink, pressed && layout.pressed]} testID="finance-archive">
             <FinanceIcon name="archive" color={palette.muted} size={16} />
             <Text style={styles.meta}>{t.archived}</Text>
@@ -755,6 +787,7 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
       {(page.name === 'manage' || page.name === 'accountEditor') && account && <AccountManagement
         key={account.accountId} account={account} access={access} lang={lang} disabled={blocked}
         editor={page.name === 'accountEditor' ? page.editor : undefined} onAccountChanged={updateAccount}
+        onHistory={isComaBank ? () => go({ name: 'history', accountId: account.accountId }) : undefined}
         notice={page.name === 'manage' && accountNotice?.accountId === account.accountId ? accountNotice.key : undefined}
         commandError={command.error} onDelete={(expectedAccountVersion) => void command.submit({ kind: 'account.delete',
           accountId: account.accountId, body: { expectedAccountVersion } })}
@@ -792,6 +825,26 @@ function FinanceScreen({ page, inStack = false, statisticsPreset }: { page: Page
         ? <AccountStatementForm key={account.accountId + account.startDate + today + lang}
           account={account} access={access} lang={lang} focused={focused} />
         : !accounts && !listError && <ActivityIndicator color={palette.accent} accessibilityLabel={t.loading} />)}
+      {page.name === 'depositInterest' && <>
+        {interest.busy && <ActivityIndicator color={palette.accent} accessibilityLabel={t.loading} />}
+        {interest.error && <FinanceAlert>{
+          interest.error === 'NOT_FOUND' || interest.error === 'ACCOUNT_UNAVAILABLE' ? t.unavailable : interestCopy.loadError
+        }</FinanceAlert>}
+        {(interest.error || command.error === 'VERSION_CONFLICT') && <FinanceButton title={interestCopy.reload}
+          disabled={blocked || interest.busy} onPress={() => {
+            command.clearError();
+            void interest.load();
+          }} />}
+        {interest.data && <DepositInterest key={interest.data.previewId} preview={interest.data}
+          lang={lang} disabled={blocked || interest.busy || !!interest.error || command.error === 'VERSION_CONFLICT'}
+          onApply={(decision) => {
+            if (!interest.data) return;
+            void command.submit({ kind: 'deposit.interest.apply', accountId: page.accountId,
+              body: { previewId: interest.data.previewId, ...(decision && { decision }) } });
+          }}
+          onEditIncome={(transactionId) => go({ name: 'revise', transactionId })}
+          onSchedule={(ruleId) => go({ name: 'schedule', ruleId, accountId: page.accountId, section: 'rules' })} />}
+      </>}
       {transactionId && <>
         {transaction.busy && <ActivityIndicator color={palette.accent} accessibilityLabel={t.loading} />}
         {transaction.error && <>
@@ -875,7 +928,7 @@ function AccountRow({ account, lang, divider, open }: { account: Account; lang: 
 }
 
 const layout = StyleSheet.create({
-  transactionActions: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
+  headerIconButton: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
   transactionActionsIcon: { color: palette.ink, fontSize: 24, fontWeight: '600' },
   container: { flex: 1, backgroundColor: palette.ground },
   accountGroup: { overflow: 'hidden' },

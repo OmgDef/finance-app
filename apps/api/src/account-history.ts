@@ -7,7 +7,8 @@ import { transactionSourceFields } from './transaction-source.ts';
 
 type AccountHistory = Result<'listAccountHistory'>;
 type Entry = AccountHistory['entries'][number];
-type HistoryRow = { currency: AccountHistory['currency']; transactionSource: string | null } & (Entry | { type: null });
+type HistoryRow = { currency: AccountHistory['currency']; transactionSource: string | null; interestPosted: number | null } &
+  (Entry | { type: null });
 const pageSize = 50;
 
 export async function listAccountHistory(tx: Tx, userId: string, accountId: string,
@@ -29,17 +30,20 @@ export async function listAccountHistory(tx: Tx, userId: string, accountId: stri
     ), history_entries AS (
       SELECT a.id, a.start_date AS date, 'opening' AS type, a.opening_balance_minor AS amountMinor,
         NULL AS explanation, NULL AS actorRole, NULL AS transactionVersion, NULL AS status,
-        NULL AS categoryId, NULL AS comment, NULL AS transactionSource
+        NULL AS categoryId, NULL AS comment, NULL AS transactionSource, NULL AS interestPosted
       FROM owned_account a
       UNION ALL
-      SELECT b.id, b.financial_date, 'adjustment', b.delta_minor, b.explanation, b.actor_role, NULL, NULL, NULL, NULL, NULL
+      SELECT b.id, b.financial_date, 'adjustment', b.delta_minor, b.explanation, b.actor_role,
+        NULL, NULL, NULL, NULL, NULL, NULL
       FROM owned_account a JOIN balance_adjustments b ON b.account_id = a.id
       UNION ALL
-      SELECT t.id, v.financial_date, t.kind, m.amount_minor, NULL, v.actor_role, v.version, v.status, v.category_id, v.comment, v.income_source
+      SELECT t.id, v.financial_date, t.kind, m.amount_minor, NULL, v.actor_role, v.version, v.status, v.category_id,
+        v.comment, v.income_source, (p.transaction_id IS NOT NULL)
       FROM owned_account a JOIN movements m ON m.account_id = a.id
       JOIN transactions t ON t.id = m.transaction_id AND t.user_id = ${userId}
       JOIN transaction_versions v ON v.transaction_id = t.id AND v.version = t.current_version
         AND m.transaction_version = v.version - (v.status = 'void')
+      LEFT JOIN deposit_interest_periods p ON p.transaction_id = t.id AND p.outcome = 'posted'
       WHERE t.deleted_at IS NULL
     ), history_page AS (
       SELECT * FROM history_entries
@@ -47,7 +51,7 @@ export async function listAccountHistory(tx: Tx, userId: string, accountId: stri
       ORDER BY date DESC, id DESC LIMIT ${pageSize + 1}
     )
     SELECT a.currency, h.id, CAST(h.date AS CHAR) AS date, h.type, CAST(h.amountMinor AS CHAR) AS amountMinor,
-      h.explanation, h.actorRole, h.transactionVersion, h.status, h.categoryId, h.comment, h.transactionSource
+      h.explanation, h.actorRole, h.transactionVersion, h.status, h.categoryId, h.comment, h.transactionSource, h.interestPosted
     FROM owned_account a LEFT JOIN history_page h ON TRUE ORDER BY h.date DESC, h.id DESC`);
   if (!history.length) throw new AccessError(404, 'NOT_FOUND');
 
@@ -62,7 +66,8 @@ export async function listAccountHistory(tx: Tx, userId: string, accountId: stri
     } else {
       const { actorRole, transactionVersion, status, categoryId, comment, transactionSource } = row;
       entries.push({ id, date, type: row.type, amountMinor, actorRole, transactionVersion, status, categoryId, comment,
-        ...transactionSourceFields(row.type, transactionSource) });
+        ...transactionSourceFields(row.type, transactionSource),
+        ...(row.interestPosted && { automaticInterest: true as const }) });
     }
   }
   const last = entries.at(-1);

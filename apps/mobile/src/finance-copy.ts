@@ -1,8 +1,9 @@
 export const financeCopy = {
   en: {
     balances: 'Balances by currency', accounts: 'Accounts', myAccounts: 'My accounts', archived: 'Archived accounts',
+    accountsAndCards: 'Accounts and cards', linkedCards: 'Linked cards',
     addAccount: 'Add account', expense: 'Record expense', history: 'History', loadMore: 'More transactions',
-    income: 'Record income', newTransfer: 'Record transfer',
+    income: 'Record income', newTransfer: 'Record transfer', betweenOwnAccounts: 'Between your accounts',
     quickExpenses: 'Quick expenses', phoneTopUp: 'Phone top-up', utilities: 'Utilities', groceries: 'Groceries', transport: 'Transport',
     dining: 'Dining out', shopping: 'Shopping', health: 'Health', entertainment: 'Leisure', travel: 'Travel',
     dateAndNote: 'Date and note',
@@ -31,6 +32,7 @@ export const financeCopy = {
     futureStartDate: 'Choose today or an earlier date.',
     startAfterMaturity: 'Choose a start date on or before the deposit’s maturity date.',
     startDateConflict: 'Choose a date on or before the earliest transaction, reconciliation, or schedule rule for this account.',
+    depositInterestStarted: 'Interest has already been processed using this start date.',
     archiveAccount: 'Archive account', restoreAccount: 'Restore account', accountArchived: 'Account archived',
     accountRestored: 'Account restored', archivedAccount: 'Archived account',
     archiveTitle: 'Archive this account?', archiveExplanation: 'The account will move to the archive. Its history and cards stay available.',
@@ -106,8 +108,9 @@ export const financeCopy = {
   },
   ru: {
     balances: 'Остатки по валютам', accounts: 'Счета', myAccounts: 'Мои счета', archived: 'Архив счетов',
+    accountsAndCards: 'Счета и карты', linkedCards: 'Привязанные карты',
     addAccount: 'Добавить счёт', expense: 'Записать расход', history: 'История', loadMore: 'Ещё операции',
-    income: 'Записать доход', newTransfer: 'Записать перевод',
+    income: 'Записать доход', newTransfer: 'Записать перевод', betweenOwnAccounts: 'Между своими счетами',
     quickExpenses: 'Быстрые расходы', phoneTopUp: 'Пополнение телефона', utilities: 'ЖКХ', groceries: 'Продукты', transport: 'Транспорт',
     dining: 'Кафе', shopping: 'Покупки', health: 'Здоровье', entertainment: 'Досуг', travel: 'Поездки',
     dateAndNote: 'Дата и комментарий',
@@ -136,6 +139,7 @@ export const financeCopy = {
     futureStartDate: 'Укажите сегодняшнюю дату или более раннюю.',
     startAfterMaturity: 'Укажите дату начала не позже даты окончания вклада.',
     startDateConflict: 'Выберите дату не позже первой операции, сверки или даты графика по этому счёту.',
+    depositInterestStarted: 'По этой дате начала уже обработаны проценты.',
     archiveAccount: 'Архивировать счёт', restoreAccount: 'Восстановить счёт', accountArchived: 'Счёт в архиве',
     accountRestored: 'Счёт восстановлен', archivedAccount: 'Архивный счёт',
     archiveTitle: 'Архивировать этот счёт?', archiveExplanation: 'Счёт перейдёт в архив. Его история и карточки останутся доступны.',

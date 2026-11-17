@@ -1,5 +1,6 @@
 import { Stack } from 'expo-router';
 import { useAccessSession } from '../../src/access-session';
+import { isComaBank } from '../../src/app-variant';
 import { financeCopy } from '../../src/finance-copy';
 import { FinanceWorkspace } from '../../src/finance-screen';
 import { palette } from '../../src/finance-ui';
@@ -14,7 +15,7 @@ export default function FinanceLayout() {
   return <ProfileSummaryProvider key={access.token}><FinanceWorkspace access={access} lang={lang}>
     <Stack screenOptions={{ headerStyle: { backgroundColor: palette.panel },
       headerTintColor: palette.accent, headerTitleStyle: { color: palette.ink }, headerBackButtonDisplayMode: 'minimal',
-      contentStyle: { backgroundColor: palette.ground }, statusBarStyle: 'dark' }}>
+      contentStyle: { backgroundColor: palette.ground }, statusBarStyle: isComaBank ? 'light' : 'dark' }}>
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       <Stack.Screen name="profile" options={{ title: profileCopy[lang].title }} />
       <Stack.Screen name="settings/profile" options={{ title: profileCopy[lang].details }} />

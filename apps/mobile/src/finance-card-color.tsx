@@ -168,7 +168,7 @@ const layout = StyleSheet.create({
   swatch: { width: 52, height: 32, borderRadius: 6, borderWidth: StyleSheet.hairlineWidth, borderColor: '#00000033',
     alignItems: 'center', justifyContent: 'center' },
   modal: { flex: 1, alignItems: 'center', justifyContent: 'flex-end' },
-  backdrop: { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(23, 38, 58, 0.35)' },
+  backdrop: { ...StyleSheet.absoluteFill, backgroundColor: palette.scrim },
   sheet: { width: '100%', maxWidth: 420, maxHeight: '90%', backgroundColor: palette.panel,
     borderTopLeftRadius: 20, borderTopRightRadius: 20, overflow: 'hidden' },
   sheetContent: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 12, gap: 12 },

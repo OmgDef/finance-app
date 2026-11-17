@@ -1,14 +1,17 @@
 import { useEffect } from 'react';
-import { DefaultTheme, Stack, ThemeProvider } from 'expo-router';
+import { Appearance, Platform } from 'react-native';
+import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from 'expo-router';
 import BootSplash from 'react-native-bootsplash';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { AccessProvider, useAccessSession } from '../src/access-session';
+import { isComaBank } from '../src/app-variant';
 import { palette } from '../src/finance-ui';
 import { unlockBackground } from '../src/unlock-screen';
 
+const baseTheme = isComaBank ? DarkTheme : DefaultTheme;
 const theme = {
-  ...DefaultTheme,
-  colors: { ...DefaultTheme.colors, primary: palette.accent, background: palette.ground, card: palette.panel,
+  ...baseTheme,
+  colors: { ...baseTheme.colors, primary: palette.accent, background: palette.ground, card: palette.panel,
     text: palette.ink, border: palette.line },
 };
 
@@ -24,7 +27,8 @@ function RootStack() {
     return () => cancelAnimationFrame(frame);
   }, [startupReady, setSplashHidden]);
 
-  return <Stack screenOptions={{ headerShown: false, statusBarStyle: 'dark', contentStyle: { backgroundColor: palette.ground } }}>
+  return <Stack screenOptions={{ headerShown: false, statusBarStyle: isComaBank ? 'light' : 'dark',
+    contentStyle: { backgroundColor: palette.ground } }}>
     <Stack.Protected guard={!access} redirectTo={restoreSettings ? '/settings' : '/accounts'}>
       <Stack.Screen name="index" options={showsUnlockScreen ? {
         statusBarStyle: 'light', contentStyle: { backgroundColor: unlockBackground },
@@ -37,6 +41,10 @@ function RootStack() {
 }
 
 export default function Layout() {
+  useEffect(() => {
+    if (isComaBank && Platform.OS === 'android') Appearance.setColorScheme('dark');
+  }, []);
+
   return <ThemeProvider value={theme}>
     <KeyboardProvider preload={false}>
       <AccessProvider><RootStack /></AccessProvider>

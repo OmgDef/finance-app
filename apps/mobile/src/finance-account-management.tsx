@@ -30,19 +30,21 @@ const accountErrors: Record<string, FinanceCopyKey> = {
   VERSION_CONFLICT: 'accountVersionConflict',
   ACCOUNT_UNAVAILABLE: 'unavailable',
   ACCOUNT_START_DATE_CONFLICT: 'startDateConflict',
+  DEPOSIT_INTEREST_STARTED: 'depositInterestStarted',
   INVALID_REQUEST: 'invalidRequest',
   NOT_FOUND: 'unavailable',
 };
 const ambiguousErrors = ['NETWORK', 'INTERNAL_ERROR', 'TEMPORARY_FAILURE'];
 
 export function AccountManagement({ account, access, lang, disabled, editor, notice, onAccountChanged, onReconcile,
-  onEdit, onBusy, onFinish, onDelete, commandError }: {
+  onEdit, onBusy, onFinish, onDelete, commandError, onHistory }: {
   account: Account; access: FinanceAccess; lang: Language; disabled: boolean;
   editor?: AccountEditor;
   notice?: FinanceCopyKey;
   onAccountChanged: (account: Account) => void; onReconcile: () => void;
   onEdit: (editor: AccountEditor) => void; onBusy: (busy: boolean) => void; onFinish: (result?: FinanceCopyKey) => void;
   onDelete: (expectedAccountVersion: number) => void; commandError: string;
+  onHistory?: () => void;
 }) {
   const t = financeCopy[lang];
   const accountId = account.accountId;
@@ -206,6 +208,8 @@ export function AccountManagement({ account, access, lang, disabled, editor, not
       <FinanceButton title={t.reloadAccount} disabled={busy} onPress={() => void loadAccount()} testID="finance-refresh-account" />
     </View>}
     {!editor && accountLoad === 'ready' && <View style={layout.actions}>
+      {snapshot.archived && onHistory && <FinanceButton title={t.history} icon="clock" disabled={blocked}
+        onPress={onHistory} testID="finance-archived-account-history" />}
       {!snapshot.archived && <>
         <FinanceButton title={t.renameAccount} disabled={blocked} onPress={() => {
           setMessage(undefined);

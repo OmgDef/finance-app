@@ -2,14 +2,14 @@ import { useEffect, useRef, useState } from 'react';
 import { AppState, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Language } from '@teta/contracts';
-import { appBrand, appVariant } from './app-variant';
+import { appBrand, isComaBank } from './app-variant';
 import { copy } from './copy';
 import { FinanceIcon } from './finance-icon';
+import { FinanceBrand, palette } from './finance-ui';
 import { SupportScreen } from './support-screen';
 
-export const unlockBackground = appBrand.brandColor;
-const foreground = '#FFFFFF';
-const isWallet = appVariant === 'b';
+export const unlockBackground = isComaBank ? palette.ground : appBrand.brandColor;
+const foreground = isComaBank ? palette.ink : '#FFFFFF';
 const digits = [['1', '2', '3'], ['4', '5', '6'], ['7', '8', '9']];
 
 export function UnlockScreen({ lang, busy, message, languageError, canUseBiometrics, verifyingActivation,
@@ -79,6 +79,7 @@ export function UnlockScreen({ lang, busy, message, languageError, canUseBiometr
     <ScrollView contentInsetAdjustmentBehavior="never"
       contentContainerStyle={[styles.page, { paddingBottom: styles.page.paddingBottom + bottom }]}>
       <View style={styles.header}>
+        {isComaBank && <FinanceBrand title={t.appName} prominent />}
         <Pressable accessibilityRole="button" accessibilityLabel={lang === 'en' ? 'Русский' : 'English'}
           style={styles.linkTarget} onPress={onLanguage}>
           <Text style={styles.language}>{lang === 'en' ? 'RU' : 'EN'}</Text>
@@ -135,23 +136,25 @@ export function UnlockScreen({ lang, busy, message, languageError, canUseBiometr
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: unlockBackground },
   page: { flexGrow: 1, width: '100%', maxWidth: 540, alignSelf: 'center', paddingHorizontal: 20, paddingBottom: 8 },
-  header: { flexDirection: 'row', justifyContent: 'flex-end' },
+  header: { flexDirection: 'row', alignItems: isComaBank ? 'center' : undefined,
+    justifyContent: isComaBank ? 'space-between' : 'flex-end' },
   main: { flexGrow: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 4, paddingBottom: 12 },
   heading: { color: foreground, fontSize: 22, fontWeight: '500', textAlign: 'center' },
   dots: { flexDirection: 'row', gap: 16, marginTop: 14 },
   dot: { width: 18, height: 18, borderRadius: 9, borderWidth: 1.5, borderColor: foreground },
-  filled: { backgroundColor: foreground },
+  filled: { backgroundColor: isComaBank ? palette.accent : foreground },
   feedback: { minHeight: 36, justifyContent: 'center', paddingVertical: 4 },
   message: { color: foreground, fontSize: 14, textAlign: 'center' },
   grid: { gap: 14 },
   row: { flexDirection: 'row', gap: 14 },
-  key: { borderWidth: 2, borderColor: isWallet ? '#93B2A4' : '#8895BF', alignItems: 'center', justifyContent: 'center' },
+  key: { borderWidth: isComaBank ? 1 : 2, borderColor: isComaBank ? palette.line : '#8895BF',
+    backgroundColor: isComaBank ? palette.panel : undefined, alignItems: 'center', justifyContent: 'center' },
   digit: { color: foreground, fontVariant: ['tabular-nums'] },
-  pressed: { backgroundColor: isWallet ? '#356959' : '#3D4D8C', borderColor: foreground },
+  pressed: { backgroundColor: isComaBank ? palette.selected : '#3D4D8C', borderColor: foreground },
   disabled: { opacity: 0.52 },
   footer: { alignItems: 'center', marginTop: 28 },
   linkTarget: { minHeight: 44, justifyContent: 'center', paddingHorizontal: 10 },
-  language: { color: isWallet ? '#DEEFE4' : '#E0E6FF', textAlign: 'center', fontSize: 14, fontWeight: '600' },
+  language: { color: isComaBank ? palette.accent : '#E0E6FF', textAlign: 'center', fontSize: 14, fontWeight: '600' },
   recovery: { color: foreground, textAlign: 'center', fontSize: 18, fontWeight: '600', textDecorationLine: 'underline' },
-  support: { backgroundColor: foreground, borderRadius: 12, padding: 14 },
+  support: { backgroundColor: isComaBank ? palette.panel : foreground, borderRadius: 12, padding: 14 },
 });

@@ -6,6 +6,7 @@ import type { ReactNode } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import type { Language, Result } from '@teta/contracts';
+import { isComaBank } from './app-variant';
 import { copy } from './copy';
 import { financeCopy } from './finance-copy';
 import { FinanceIcon } from './finance-icon';
@@ -16,6 +17,7 @@ import { profileCopy } from './profile-copy';
 import { timeZoneLabel } from './time-zones';
 
 const languageNames = { ru: 'Русский', en: 'English' } as const;
+const groupNames = { en: { finance: 'Finances', app: 'App' }, ru: { finance: 'Финансы', app: 'Приложение' } } as const;
 
 const application = requireOptionalNativeModule<{
   nativeApplicationVersion: string | null;
@@ -42,7 +44,7 @@ export function FinanceSettingsLinks({ lang, onAccounts, onSchedule }: {
   onAccounts: () => void;
   onSchedule: () => void;
 }) {
-  return <View style={styles.surface}>
+  return <View style={!isComaBank && styles.surface}>
     <SettingRow icon="wallet" title={financeCopy[lang].manageAccounts} onPress={onAccounts} testID="finance-account-settings" />
     <View style={layout.divider}>
       <SettingRow icon="calendar" title={scheduleCopy[lang].scheduleSettings} onPress={onSchedule} testID="finance-schedule-settings" />
@@ -50,10 +52,11 @@ export function FinanceSettingsLinks({ lang, onAccounts, onSchedule }: {
   </View>;
 }
 
-export function SettingsScreen({ lang, profile, busy, languageError, zoneEditing, zoneNotice, notice,
+export function SettingsScreen({ lang, profile, financeLinks, busy, languageError, zoneEditing, zoneNotice, notice,
   biometricsEnabled, onLanguage, onTimeZone, onBiometrics, onSignOut }: {
   lang: Language;
   profile: Result<'me'>;
+  financeLinks?: ReactNode;
   busy: boolean;
   languageError: boolean;
   zoneEditing: boolean;
@@ -69,52 +72,71 @@ export function SettingsScreen({ lang, profile, busy, languageError, zoneEditing
   const router = useRouter();
   const [languageOpen, setLanguageOpen] = useState(false);
   const closeLanguage = () => setLanguageOpen(false);
+  const timeZone = <View style={layout.divider}>
+    <SettingRow icon="clock" title={t.timeZone} hint={t.editTimeZone} value={timeZoneLabel(profile.timeZone, lang)}
+      valueID="finance-current-time-zone" onPress={onTimeZone} expanded={zoneEditing} disabled={busy}
+      testID="finance-edit-time-zone" />
+    {zoneNotice}
+  </View>;
+  const language = <SettingRow icon="language" title={t.language} value={languageNames[lang]}
+    onPress={() => setLanguageOpen(true)} expanded={languageOpen} testID="finance-language" />;
+  const biometrics = <SettingRow icon="biometrics" title={t.biometricSignIn} value={biometricsEnabled ? t.biometricOn : t.biometricOff}
+    hint={biometricsEnabled ? t.disable : t.enable} onPress={onBiometrics} disabled={busy} testID="finance-biometrics" />;
+  const signOut = <Pressable accessibilityRole="button" accessibilityState={{ disabled: busy }} disabled={busy} onPress={onSignOut}
+    style={({ pressed }) => [layout.row, isComaBank && layout.flush, (busy || pressed) && styles.dimmed]} testID="finance-sign-out">
+    <FinanceIcon name="sign-out" color={palette.danger} />
+    <Text style={[styles.title, layout.signOut]}>{t.signOut}</Text>
+  </Pressable>;
+
   return <>
     <View style={layout.group}>
-      <Text accessibilityRole="header" style={styles.groupTitle}>{t.profile}</Text>
-      <View style={styles.surface}>
-        <View style={layout.row}>
+      <Text accessibilityRole="header" style={isComaBank ? styles.section : styles.groupTitle}>{t.profile}</Text>
+      <View style={!isComaBank && styles.surface}>
+        <View style={[layout.row, isComaBank && styles.surface]}>
           <View style={layout.avatar}><FinanceIcon name="profile" color={palette.ink} size={17} /></View>
           <View style={layout.identity}>
             <Text style={styles.title}>{profile.email}</Text>
             <Text style={styles.meta}>{t.accountEmail}</Text>
           </View>
         </View>
-        <View style={layout.divider}>
+        <View style={!isComaBank && layout.divider}>
           <SettingRow icon="profile" title={profileCopy[lang].details} onPress={() => router.push('/settings/profile')}
             testID="profile-edit-open" />
         </View>
-        <View style={layout.divider}>
-          <SettingRow icon="clock" title={t.timeZone} hint={t.editTimeZone} value={timeZoneLabel(profile.timeZone, lang)}
-            valueID="finance-current-time-zone" onPress={onTimeZone} expanded={zoneEditing}
-            disabled={busy}
-            testID="finance-edit-time-zone" />
-          {zoneNotice}
+        {!isComaBank && timeZone}
+      </View>
+    </View>
+    {isComaBank ? <>
+      <View style={layout.group}>
+        <Text accessibilityRole="header" style={styles.section}>{groupNames[lang].finance}</Text>
+        <View>
+          {financeLinks}
+          {timeZone}
         </View>
       </View>
-    </View>
-    <View style={layout.group}>
-      <Text accessibilityRole="header" style={styles.groupTitle}>{t.interface}</Text>
-      <View style={styles.surface}>
-        <SettingRow icon="language" title={t.language} value={languageNames[lang]} onPress={() => setLanguageOpen(true)}
-          expanded={languageOpen} testID="finance-language" />
+      <View style={layout.group}>
+        <Text accessibilityRole="header" style={styles.section}>{groupNames[lang].app}</Text>
+        <View>
+          {language}
+          {languageError && <FinanceAlert>{t.languageSaveFailed}</FinanceAlert>}
+          <View style={layout.divider}>{biometrics}</View>
+          {notice}
+          <View style={layout.divider}>{signOut}</View>
+        </View>
       </View>
-      {languageError && <FinanceAlert>{t.languageSaveFailed}</FinanceAlert>}
-    </View>
-    <View style={layout.group}>
-      <Text accessibilityRole="header" style={styles.groupTitle}>{t.security}</Text>
-      <View style={styles.surface}>
-        <SettingRow icon="biometrics" title={t.biometricSignIn} value={biometricsEnabled ? t.biometricOn : t.biometricOff}
-          hint={biometricsEnabled ? t.disable : t.enable} onPress={onBiometrics}
-          disabled={busy} testID="finance-biometrics" />
+    </> : <>
+      <View style={layout.group}>
+        <Text accessibilityRole="header" style={styles.groupTitle}>{t.interface}</Text>
+        <View style={styles.surface}>{language}</View>
+        {languageError && <FinanceAlert>{t.languageSaveFailed}</FinanceAlert>}
       </View>
-      {notice}
-    </View>
-    <Pressable accessibilityRole="button" accessibilityState={{ disabled: busy }} disabled={busy} onPress={onSignOut}
-      style={({ pressed }) => [layout.row, (busy || pressed) && styles.dimmed]} testID="finance-sign-out">
-      <FinanceIcon name="sign-out" color={palette.danger} />
-      <Text style={[styles.title, layout.signOut]}>{t.signOut}</Text>
-    </Pressable>
+      <View style={layout.group}>
+        <Text accessibilityRole="header" style={styles.groupTitle}>{t.security}</Text>
+        <View style={styles.surface}>{biometrics}</View>
+        {notice}
+      </View>
+      {signOut}
+    </>}
     <AppInfo lang={lang} />
     <Modal visible={languageOpen} transparent animationType="fade" onRequestClose={closeLanguage}
       statusBarTranslucent navigationBarTranslucent>
@@ -163,8 +185,8 @@ function SettingRow({ icon, title, value, valueID, hint, onPress, expanded, disa
 }) {
   return <Pressable accessibilityRole="button" accessibilityLabel={value ? title + ', ' + value : title} accessibilityHint={hint}
     accessibilityState={{ expanded, disabled }} onPress={onPress} disabled={disabled} testID={testID}
-    style={({ pressed }) => [layout.row, (pressed || disabled) && styles.dimmed]}>
-    <FinanceIcon name={icon} color={palette.muted} />
+    style={({ pressed }) => [layout.row, isComaBank && layout.flush, (pressed || disabled) && styles.dimmed]}>
+    <FinanceIcon name={icon} color={isComaBank ? palette.accent : palette.muted} />
     <View style={layout.rowLabels}>
       <Text style={[styles.title, layout.rowTitle]}>{title}</Text>
       {value !== undefined && <Text style={styles.meta} testID={valueID}>{value}</Text>}
@@ -178,6 +200,7 @@ const layout = StyleSheet.create({
   appVersions: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', columnGap: 12, rowGap: 4 },
   group: { gap: 8 },
   row: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 8, minHeight: 52, gap: 10 },
+  flush: { paddingHorizontal: 0 },
   rowLabels: { flex: 1, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'baseline', gap: 6 },
   rowTitle: { flexGrow: 1 },
   identity: { flex: 1, gap: 2 },
@@ -186,7 +209,7 @@ const layout = StyleSheet.create({
   divider: { borderTopWidth: StyleSheet.hairlineWidth, borderColor: palette.line },
   signOut: { color: palette.danger },
   modal: { flex: 1, justifyContent: 'flex-end', alignItems: 'center' },
-  backdrop: { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(23, 38, 58, 0.35)' },
+  backdrop: { ...StyleSheet.absoluteFill, backgroundColor: palette.scrim },
   sheet: { width: '100%', maxWidth: 540, maxHeight: '90%', backgroundColor: palette.panel,
     borderTopLeftRadius: 20, borderTopRightRadius: 20 },
   sheetContent: { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 20, gap: 10 },

@@ -458,6 +458,28 @@ function* datesAfterPosition({ rule, zones, processedThrough }: StoredCalendar, 
   }
 }
 
+export async function readDepositScheduleBlockers(tx: Tx, userId: string, accountId: string, asOf: number,
+  maturityDate: string,
+) {
+  const calendars = await readCalendars(tx, userId, asOf, sql`r.account_id = ${accountId}`);
+  let competingRuleId: string | undefined;
+  let pending: { ruleId: string; date: string; interest: boolean } | undefined;
+  for (const calendar of calendars) {
+    for (const next of datesAfterPosition(calendar, asOf, maturityDate)) {
+      if (calendar.outcomes.has(next.date)) continue;
+      const interest = next.kind === 'income' && next.categoryId === 'deposit-interest';
+      if (interest && next.dueAt > asOf) {
+        competingRuleId ??= next.ruleId;
+      }
+      if (next.dueAt <= asOf && (!pending || next.date < pending.date || (next.date === pending.date && interest))) {
+        pending = { ruleId: next.ruleId, date: next.date, interest };
+      }
+      break;
+    }
+  }
+  return { competingRuleId, pending };
+}
+
 export type ScheduleCandidate = { userId: string; accountId: string; ruleId: string; date: string };
 type ScheduleOutcome = { status: 'posted'; transactionId: string }
   | { status: 'skipped'; reason: string; adjustmentId: string | null; sourceOccurrenceId?: string };

@@ -1,5 +1,6 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { Language, Result } from '@teta/contracts';
+import { isComaBank } from './app-variant';
 import { addFinancialDays, formatChartAmount, formatFinancialDate, formatMoney } from './finance-format';
 import type { Currency } from './finance-format';
 import { statisticsCopy } from './finance-statistics-copy';
@@ -10,7 +11,7 @@ type Week = Pick<Report, 'fromDate' | 'throughDate'> & { incomeMinor: string; ex
 
 export const cashFlowSeries = [
   { field: 'incomeMinor', label: 'income', color: palette.accent },
-  { field: 'expenseMinor', label: 'expenses', color: '#6D8198' },
+  { field: 'expenseMinor', label: 'expenses', color: isComaBank ? palette.muted : '#6D8198' },
 ] as const;
 
 export function cashFlowWeeks(report: Report | undefined, currency: Currency): Week[] {

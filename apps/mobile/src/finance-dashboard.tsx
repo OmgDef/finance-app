@@ -3,7 +3,7 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, View, useWindowDimensio
 import type { StyleProp, ViewStyle } from 'react-native';
 import type { ReactNode } from 'react';
 import type { Language, Result } from '@teta/contracts';
-import { appVariant } from './app-variant';
+import { isComaBank } from './app-variant';
 import { copy } from './copy';
 import { cashFlowSeries, cashFlowWeeks, WeeklyCashFlowPlot } from './finance-cash-flow';
 import { financeCopy } from './finance-copy';
@@ -19,6 +19,9 @@ type Account = Result<'listAccounts'>['accounts'][number];
 type CardPreview = Result<'listAccounts'>['cardPreviews'][number];
 type Quote = Result<'getExchangeRates'>['rates'][number];
 type Read<T> = { data?: T; busy: boolean; error?: string; load(): Promise<void> };
+type RatesProps = { read: Read<Result<'getExchangeRates'>>; lang: Language };
+
+const rateCurrencies = ['USD', 'EUR'] as const;
 
 const labels = {
   ru: {
@@ -27,7 +30,8 @@ const labels = {
     noFlow: 'Нет операций за 90 дней.', flowError: 'Не удалось обновить движение денег.',
     rates: 'Курсы валют', source: 'Официальные курсы Банка России', ratesError: 'Не удалось обновить курсы валют.',
     cachedRates: 'Показаны сохранённые курсы.', effective: 'Действует с', change: 'К предыдущему курсу',
-    history: 'Динамика за 30 дней',
+    history: 'Динамика за 30 дней', rateDetails: 'Точный курс и история',
+    rateUp: 'Выше предыдущего курса', rateDown: 'Ниже предыдущего курса', rateUnchanged: 'Курс не изменился',
   },
   en: {
     switchBalance: 'Show balance', annual: 'per year', matures: 'until', moreCards: 'More cards',
@@ -35,7 +39,8 @@ const labels = {
     noFlow: 'No transactions in the last 90 days.', flowError: 'Could not update cash flow.',
     rates: 'Exchange rates', source: 'Official Bank of Russia rates', ratesError: 'Could not update exchange rates.',
     cachedRates: 'Showing saved rates.', effective: 'Effective from', change: 'Since the previous rate',
-    history: '30-day history',
+    history: '30-day history', rateDetails: 'Exact rate and history',
+    rateUp: 'Above the previous rate', rateDown: 'Below the previous rate', rateUnchanged: 'Rate unchanged',
   },
 } as const;
 
@@ -48,16 +53,28 @@ export function BalanceCard({ accounts, lang }: { accounts: Account[]; lang: Lan
   for (const { currency, balanceMinor } of accounts) totals[currency] += BigInt(balanceMinor);
   const amount = (currency: Currency) => formatMoney(String(totals[currency]), currency, lang);
 
-  if (appVariant === 'b') {
-    return <View style={[styles.surface, layout.walletBalance]} testID="finance-dashboard-balances">
+  if (isComaBank) {
+    const stackCurrencies = (Math.min(width, styles.page.maxWidth) - 2 * styles.page.paddingHorizontal) / fontScale < 270 ||
+      alternatives.some((currency) => amount(currency).length > 16);
+    return <View style={layout.comabankBalance} testID="finance-dashboard-balances">
       <Text accessibilityRole="header" style={styles.section}>{financeCopy[lang].balances}</Text>
-      <Text style={layout.walletMainBalance} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.35}
-        testID="finance-dashboard-main-balance">{amount(primary)}</Text>
-      {alternatives.map((currency) => <View key={currency} style={layout.walletCurrencyRow}
-        testID={'finance-dashboard-balance-' + currency}>
-        <Text style={styles.meta}>{currencyName(currency, lang)}</Text>
-        <Text style={layout.walletCurrencyValue}>{amount(currency)}</Text>
-      </View>)}
+      <View style={styles.surface}>
+        <View style={[layout.comabankCurrencyRow, layout.comabankMainRow]}>
+          <Text style={layout.comabankCurrency}>{primary}</Text>
+          <Text style={layout.comabankMainBalance} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}
+            testID="finance-dashboard-main-balance">{amount(primary)}</Text>
+        </View>
+        <View style={!stackCurrencies && layout.comabankCurrencyPair}>
+          {alternatives.map((currency, index) => <View key={currency} testID={'finance-dashboard-balance-' + currency}
+            style={[layout.comabankCurrencyRow, layout.rowDivider, !stackCurrencies && layout.comabankCurrencyCell,
+              !stackCurrencies && index > 0 && layout.comabankCurrencySplit]}>
+            <Text style={layout.comabankCurrency}>{currency}</Text>
+            <Text style={layout.comabankCurrencyValue} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.65}>
+              {amount(currency)}
+            </Text>
+          </View>)}
+        </View>
+      </View>
     </View>;
   }
 
@@ -84,6 +101,9 @@ export function BalanceCard({ accounts, lang }: { accounts: Account[]; lang: Lan
 export function OverviewAccountCard({ account, preview, lang, divider, onOpen }: {
   account: Account; preview?: CardPreview; lang: Language; divider: boolean; onOpen(): void;
 }) {
+  const { width, fontScale } = useWindowDimensions();
+  const contentWidth = Math.min(width, styles.page.maxWidth) - 2 * styles.page.paddingHorizontal;
+  const stack = isComaBank && contentWidth / fontScale < 290;
   const t = financeCopy[lang];
   const words = labels[lang];
   const type = 'type' in account ? account.type : 'regular';
@@ -99,20 +119,36 @@ export function OverviewAccountCard({ account, preview, lang, divider, onOpen }:
   const label = [account.name, amount, t[type], terms,
     account.needsReconciliation && t.needsReconciliation, cardSummary].filter(Boolean).join(', ');
   return <Pressable accessibilityRole="button" accessibilityLabel={label} testID={'finance-account-' + account.accountId}
-    onPress={onOpen} style={({ pressed }) => [layout.overviewAccount, divider && layout.rowDivider, pressed && layout.overviewAccountPressed]}>
-    <View style={layout.accountLine}>
-      <View style={layout.accountIdentity}>
-        <FinanceIcon name={type === 'regular' ? 'wallet' : type} color={palette.muted} size={18} />
+    onPress={onOpen} style={({ pressed }) => [layout.overviewAccount, isComaBank && layout.comabankAccount,
+      divider && layout.rowDivider, pressed && layout.overviewAccountPressed]}>
+    <View style={[layout.accountLine, stack && layout.accountLineStacked]}>
+      <View style={[layout.accountIdentity, stack && layout.accountIdentityStacked]}>
+        <FinanceIcon name={type === 'regular' ? 'wallet' : type} color={isComaBank ? palette.accent : palette.muted} size={18} />
         <Text style={styles.title}>{account.name}</Text>
       </View>
-      <View style={layout.accountValue}>
-        <Text style={layout.accountAmount}>{amount}</Text>
+      <View style={[layout.accountValue, stack && layout.accountValueStacked]}>
+        <Text style={[layout.accountAmount, isComaBank && layout.comabankAccountAmount]}>{amount}</Text>
         <FinanceIcon name="chevron" color={palette.muted} size={13} />
       </View>
     </View>
     {terms && <Text style={[styles.meta, layout.accountDetail]}>{terms}</Text>}
+    {isComaBank && !terms && !preview?.cards.length && <Text style={[styles.meta, layout.accountDetail]}>
+      {type === 'regular' ? t[type] + ' · ' : ''}{account.currency}
+    </Text>}
     {account.needsReconciliation && <Text style={[styles.meta, layout.accountDetail]}>{t.needsReconciliation}</Text>}
-    {preview && <View style={layout.linkedCards}>
+    {isComaBank && !!preview?.cards.length && <View style={layout.linkedCards}>
+      {preview.cards.map(({ cardId, appearance, lastFour, name }) => {
+        const color = cardTextColor(appearance);
+        return <View key={cardId} style={layout.cardMini}>
+          <View style={[layout.cardMiniSwatch, { backgroundColor: appearance, borderColor: color + '5C' }]}>
+            <View style={[layout.cardMiniMark, { backgroundColor: color + 'B3' }]} />
+          </View>
+          <Text style={layout.linkedCount} numberOfLines={1}>{lastFour ? '•• ' + lastFour : name}</Text>
+        </View>;
+      })}
+      {preview.count > preview.cards.length && <Text style={layout.linkedCount}>+{preview.count - preview.cards.length}</Text>}
+    </View>}
+    {!isComaBank && preview && <View style={layout.linkedCards}>
       {preview.cards.map(({ cardId, appearance, lastFour, name, network }) => {
         const color = cardTextColor(appearance);
         const contactColor = color + '73';
@@ -244,43 +280,118 @@ function RateTrend({ history }: { history: Quote['history'] }) {
   </View>;
 }
 
-export function ExchangeRatesCard({ read, lang }: { read: Read<Result<'getExchangeRates'>>; lang: Language }) {
+function rateChange({ current, previous }: Quote) {
+  if (previous) return Number((Number(current.rate) - Number(previous.rate)).toFixed(4));
+}
+
+function RateQuoteDetails({ quote, lang, showName }: { quote: Quote | Pick<Quote, 'currency'>; lang: Language; showName?: boolean }) {
   const t = labels[lang];
-  const number = new Intl.NumberFormat(lang === 'ru' ? 'ru-RU' : 'en-GB', { minimumFractionDigits: 4, maximumFractionDigits: 4 });
-  const delta = new Intl.NumberFormat(lang === 'ru' ? 'ru-RU' : 'en-GB', {
-    minimumFractionDigits: 4, maximumFractionDigits: 4, signDisplay: 'exceptZero',
+  const locale = lang === 'ru' ? 'ru-RU' : 'en-GB';
+  const precision = { minimumFractionDigits: 4, maximumFractionDigits: 4 };
+  const number = new Intl.NumberFormat(locale, precision);
+  const delta = new Intl.NumberFormat(locale, { ...precision, signDisplay: 'exceptZero' });
+  const ruble = '\u00a0' + currencySymbol('RUB');
+  const data = 'current' in quote ? quote : undefined;
+  const change = data && rateChange(data);
+  return <>
+    <View style={layout.rateDetails}>
+      {showName && <Text style={styles.title}>{currencyName(quote.currency, lang)}</Text>}
+      <Text style={layout.metricValue}>{data
+        ? '1\u00a0' + currencySymbol(quote.currency) + ' = ' + number.format(Number(data.current.rate)) + ruble : '—'}</Text>
+      {data && <Text style={styles.meta}>{t.effective} {formatFinancialDate(data.current.date, lang)}</Text>}
+      {change !== undefined && <Text style={styles.meta}>{t.change} {delta.format(change)}{ruble}</Text>}
+    </View>
+    {data && data.history.length > 1 && <View style={layout.trend}>
+      <RateTrend history={data.history} />
+      <Text style={layout.axis}>{t.history}</Text>
+    </View>}
+  </>;
+}
+
+function ComaBankExchangeRates({ read, lang }: RatesProps) {
+  const t = labels[lang];
+  const [expanded, setExpanded] = useState<Quote['currency']>();
+  const { width, fontScale } = useWindowDimensions();
+  const stack = (Math.min(width, styles.page.maxWidth) - 2 * styles.page.paddingHorizontal) / fontScale < 240;
+  const locale = lang === 'ru' ? 'ru-RU' : 'en-US';
+  const number = new Intl.NumberFormat(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const date = new Intl.DateTimeFormat(locale, {
+    day: 'numeric', month: lang === 'ru' ? 'long' : 'short', timeZone: 'UTC',
   });
+  const dateLabel = (day: string) => date.format(new Date(day + 'T00:00:00Z'));
+  const rates = read.data?.rates ?? [];
+  const firstDate = rates[0]?.current.date;
+  const sharedDate = rates.every(({ current }) => current.date === firstDate) ? firstDate : undefined;
+
+  return <View style={layout.comabankRates} testID="finance-dashboard-rates">
+    <View style={layout.comabankRatesHeader}>
+      <Text accessibilityRole="header" style={styles.section}>{t.rates}</Text>
+      {sharedDate && <Text style={styles.meta}>{dateLabel(sharedDate)}</Text>}
+    </View>
+    <View>
+      {rateCurrencies.map((currency) => {
+        const quote = rates.find((item) => item.currency === currency);
+        const name = currencyName(currency, lang);
+        const currencyLabel = quote && !sharedDate ? currency + ' · ' + dateLabel(quote.current.date) : currency;
+        const value = quote ? number.format(Number(quote.current.rate)) + '\u00a0' + currencySymbol('RUB') : '—';
+        const change = quote && rateChange(quote);
+        const direction = change === undefined ? undefined : change > 0 ? 'rateUp' : change < 0 ? 'rateDown' : 'rateUnchanged';
+        const prefix = direction === 'rateUp' ? '↑\u00a0' : direction === 'rateDown' ? '↓\u00a0' : '';
+        const open = !!quote && expanded === currency;
+        return <View key={currency} style={layout.comabankRateDivider}>
+          <Pressable accessibilityRole={quote ? 'button' : undefined}
+            accessibilityState={quote ? { expanded: open } : undefined}
+            accessibilityHint={quote ? t.rateDetails : undefined}
+            accessibilityLabel={[name, currencyLabel, value, direction && t[direction]].filter(Boolean).join(', ')}
+            testID={'finance-dashboard-rate-' + currency} disabled={!quote}
+            onPress={() => setExpanded(open ? undefined : currency)}
+            style={({ pressed }) => [layout.comabankRateRow, stack && layout.comabankRateStack, pressed && styles.dimmed]}>
+            <View style={layout.comabankRateIdentity}>
+              <Text style={styles.title}>{name}</Text>
+              <View style={layout.comabankRateCode}>
+                <Text style={styles.meta}>{currencyLabel}</Text>
+                {quote && <FinanceIcon name={open ? 'chevron-down' : 'chevron'} color={palette.muted} size={12} />}
+              </View>
+            </View>
+            <Text style={[layout.comabankRateValue, stack && layout.comabankRateValueStack, !quote && layout.missingRate,
+              direction === 'rateUp' && layout.risingRate, direction === 'rateDown' && layout.fallingRate]}>
+              {prefix + value}
+            </Text>
+          </Pressable>
+          {open && <View style={layout.comabankRateDetails} testID={'finance-dashboard-rate-details-' + currency}>
+            <RateQuoteDetails quote={quote} lang={lang} />
+          </View>}
+        </View>;
+      })}
+    </View>
+    <Text style={styles.meta}>{t.source}</Text>
+    <ReadStatus read={read} lang={lang} message={read.data ? t.cachedRates : t.ratesError} stale={read.data?.stale} />
+  </View>;
+}
+
+export function ExchangeRatesCard({ read, lang }: RatesProps) {
+  if (isComaBank) return <ComaBankExchangeRates read={read} lang={lang} />;
+  const t = labels[lang];
   return <Card title={t.rates} detail={t.source} testID="finance-dashboard-rates">
-    {(read.data?.rates ?? [{ currency: 'USD' }, { currency: 'EUR' }] as const).map((quote, index) => {
-      const ruble = '\u00a0' + currencySymbol('RUB');
-      return <View key={quote.currency} style={[layout.rateRow, index > 0 && layout.rowDivider]}>
-        <View style={layout.rateDetails}>
-          <Text style={styles.title}>{currencyName(quote.currency, lang)}</Text>
-          <Text style={layout.metricValue}>{'current' in quote
-            ? '1\u00a0' + currencySymbol(quote.currency) + ' = ' + number.format(Number(quote.current.rate)) + ruble : '—'}</Text>
-          {'current' in quote && <Text style={styles.meta}>
-            {t.effective} {formatFinancialDate(quote.current.date, lang)}
-          </Text>}
-          {'previous' in quote && quote.previous && <Text style={styles.meta}>
-            {t.change} {delta.format(Number((Number(quote.current.rate) - Number(quote.previous.rate)).toFixed(4)))}{ruble}
-          </Text>}
-        </View>
-        {'history' in quote && quote.history.length > 1 && <View style={layout.trend}>
-          <RateTrend history={quote.history} />
-          <Text style={layout.axis}>{t.history}</Text>
-        </View>}
-      </View>;
-    })}
+    {(read.data?.rates ?? rateCurrencies.map((currency) => ({ currency }))).map((quote, index) =>
+      <View key={quote.currency} style={[layout.rateRow, index > 0 && layout.rowDivider]}>
+        <RateQuoteDetails quote={quote} lang={lang} showName />
+      </View>)}
     <ReadStatus read={read} lang={lang} message={read.data ? t.cachedRates : t.ratesError} stale={read.data?.stale} />
   </Card>;
 }
 
 const layout = StyleSheet.create({
-  walletBalance: { paddingHorizontal: 18, paddingVertical: 16, gap: 8 },
-  walletMainBalance: { ...styles.heroValue, color: palette.accent, fontSize: 40, letterSpacing: -1, marginBottom: 6 },
-  walletCurrencyRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'baseline', justifyContent: 'space-between',
-    borderTopColor: palette.line, borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 9, columnGap: 12, rowGap: 3 },
-  walletCurrencyValue: { ...styles.value, fontSize: 17, marginLeft: 'auto', textAlign: 'right' },
+  comabankBalance: { gap: 10 },
+  comabankCurrencyRow: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between',
+    gap: 8, paddingHorizontal: 14, paddingVertical: 9 },
+  comabankMainRow: { paddingVertical: 12 },
+  comabankCurrency: { color: palette.accent, fontSize: 12, fontWeight: '700' },
+  comabankMainBalance: { ...styles.heroValue, fontSize: 34, fontWeight: '700', letterSpacing: -1, flexShrink: 1, textAlign: 'right' },
+  comabankCurrencyPair: { flexDirection: 'row' },
+  comabankCurrencyCell: { flex: 1 },
+  comabankCurrencySplit: { borderLeftColor: palette.line, borderLeftWidth: StyleSheet.hairlineWidth },
+  comabankCurrencyValue: { ...styles.value, fontSize: 16, textAlign: 'right' },
   balanceCard: { backgroundColor: palette.balanceSurface, borderRadius: 20, padding: 18 },
   balanceTitle: { color: palette.balanceMuted, fontSize: 14, fontWeight: '600' },
   balanceValue: { color: palette.panel, fontSize: 40, fontWeight: '600', letterSpacing: -1.2,
@@ -294,13 +405,22 @@ const layout = StyleSheet.create({
   balanceChoicePressed: { backgroundColor: 'rgba(255,255,255,0.20)' },
   balanceChoiceValue: { color: palette.panel, fontSize: 16, fontWeight: '600', fontVariant: ['tabular-nums'], flexShrink: 1 },
   overviewAccount: { gap: 4, paddingHorizontal: 13, paddingVertical: 10, minHeight: 53, justifyContent: 'center' },
+  comabankAccount: { paddingHorizontal: 0, gap: 2, minHeight: 55 },
+  comabankAccountAmount: { fontSize: 15 },
   overviewAccountPressed: { backgroundColor: palette.raised },
   accountLine: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 },
+  accountLineStacked: { flexDirection: 'column', flexWrap: 'nowrap', alignItems: 'stretch', gap: 3 },
   accountIdentity: { flexDirection: 'row', alignItems: 'center', flexGrow: 1, flexBasis: '45%', minWidth: 112, gap: 9 },
+  accountIdentityStacked: { flexGrow: 0, flexBasis: 'auto', minWidth: 0 },
   accountValue: { marginLeft: 'auto', maxWidth: '100%', flexDirection: 'row', alignItems: 'center', gap: 7 },
+  accountValueStacked: { marginLeft: 0, paddingLeft: 27, justifyContent: 'space-between' },
   accountAmount: { color: palette.ink, fontSize: 17, fontWeight: '600', fontVariant: ['tabular-nums'], flexShrink: 1, textAlign: 'right' },
   accountDetail: { marginLeft: 27 },
   linkedCards: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginLeft: 27, marginTop: 4 },
+  cardMini: { flexDirection: 'row', alignItems: 'center', gap: 3, maxWidth: '100%', minWidth: 0, flexShrink: 1 },
+  cardMiniSwatch: { width: 19, height: 12, borderRadius: 3, borderWidth: StyleSheet.hairlineWidth,
+    paddingLeft: 3, paddingBottom: 2, justifyContent: 'flex-end' },
+  cardMiniMark: { width: 6, height: 1 },
   linkedCard: { width: 76, aspectRatio: 1.586, maxWidth: '100%', borderRadius: 6, padding: 5,
     borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(23,38,58,0.15)' },
   linkedCardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
@@ -328,6 +448,21 @@ const layout = StyleSheet.create({
   weekDetails: { borderTopColor: palette.line, borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 8, gap: 3 },
   weekMetric: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'baseline', columnGap: 8 },
   axis: { color: palette.muted, fontSize: 12, textAlign: 'center', fontVariant: ['tabular-nums'] },
+  comabankRates: { gap: 10 },
+  comabankRatesHeader: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'baseline',
+    justifyContent: 'space-between', columnGap: 10 },
+  comabankRateRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    minHeight: 64, gap: 12, paddingVertical: 10 },
+  comabankRateStack: { flexDirection: 'column', alignItems: 'stretch', gap: 4 },
+  comabankRateIdentity: { flexShrink: 1, gap: 3 },
+  comabankRateCode: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  comabankRateValue: { ...styles.title, fontSize: 17, fontWeight: '700', fontVariant: ['tabular-nums'], textAlign: 'right' },
+  comabankRateValueStack: { textAlign: 'left' },
+  comabankRateDivider: { borderBottomColor: palette.line, borderBottomWidth: StyleSheet.hairlineWidth },
+  comabankRateDetails: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, paddingBottom: 12 },
+  risingRate: { color: palette.positive },
+  fallingRate: { color: palette.danger },
+  missingRate: { color: palette.muted },
   rateRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: 10, paddingVertical: 7 },
   rateDetails: { flexGrow: 1, gap: 3 },
   rowDivider: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: palette.line },

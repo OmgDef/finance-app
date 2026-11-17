@@ -1,5 +1,6 @@
 import { setTimeout } from 'node:timers/promises';
 import { connect } from './db.ts';
+import { runDepositInterestPass } from './deposit-interest-worker.ts';
 import { verifyRecoveryVersion } from './recovery.ts';
 import { runScheduleWorkerPass } from './schedule-worker.ts';
 
@@ -22,6 +23,14 @@ try {
     } catch {
       // DB errors can include query parameters and connection details.
       console.error(JSON.stringify({ event: 'schedule_worker_pass_failed', checkedAt: Date.now() }));
+    }
+    if (!stop.signal.aborted) {
+      try {
+        const { settled, failed } = await runDepositInterestPass(db, Date.now, stop.signal);
+        if (settled || failed) console.log(JSON.stringify({ event: 'deposit_interest_pass', settled, failed }));
+      } catch {
+        console.error(JSON.stringify({ event: 'deposit_interest_pass_failed', checkedAt: Date.now() }));
+      }
     }
     if (!stop.signal.aborted) {
       await setTimeout(Math.max(0, minute - (performance.now() - started)), undefined, { signal: stop.signal })

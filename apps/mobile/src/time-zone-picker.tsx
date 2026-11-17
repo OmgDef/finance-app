@@ -4,6 +4,7 @@ import {
 } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import type { Language } from '@teta/contracts';
+import { isComaBank } from './app-variant';
 import { copy } from './copy';
 import { FinanceIcon } from './finance-icon';
 import { FinanceAlert, FinanceButton, palette, styles } from './finance-ui';
@@ -43,6 +44,7 @@ export function TimeZonePicker({ lang, current, device, selected, busy, error, o
               placeholderTextColor={palette.muted} style={styles.input} value={query}
               onChangeText={(value) => { setQuery(value); list.current?.scrollToOffset({ offset: 0, animated: false }); }}
               editable={!busy} autoCorrect={false} autoCapitalize="none" returnKeyType="search"
+              keyboardAppearance={isComaBank ? 'dark' : undefined}
               clearButtonMode="while-editing" testID="finance-time-zone-search" />
           </View>
           <FlatList ref={list} style={layout.list} contentContainerStyle={layout.rows} data={results}

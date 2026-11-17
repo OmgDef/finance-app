@@ -3,6 +3,7 @@ import { ActivityIndicator, AppState, Linking, Pressable, StyleSheet, Text, View
 import { setStringAsync } from 'expo-clipboard';
 import type { Language, Result } from '@teta/contracts';
 import { request } from './api';
+import { appVariant, isComaBank } from './app-variant';
 import { copy } from './copy';
 import { FinanceIcon } from './finance-icon';
 import { FinanceAlert, FinanceButton, palette, styles } from './finance-ui';
@@ -32,7 +33,7 @@ export function SupportScreen({ lang, showHeading = true }: { lang: Language; sh
 
   useEffect(() => {
     let live = true;
-    void request('support', { query: new URLSearchParams({ lang }) })
+    void request('support', { query: new URLSearchParams({ lang, variant: appVariant }) })
       .then((data) => { if (live) setSnapshot({ lang, revision, data }); })
       .catch(() => { if (live) setSnapshot({ lang, revision, error: true }); });
     return () => { live = false; activeAction.current += 1; };
@@ -81,12 +82,13 @@ export function SupportScreen({ lang, showHeading = true }: { lang: Language; sh
     </View>}
     {data && <>
       {contacts.length > 0 && <View style={layout.section}>
-        <Text accessibilityRole="header" style={styles.groupTitle}>{t.contacts}</Text>
-        <View style={styles.surface}>
+        <Text accessibilityRole="header" style={isComaBank ? styles.section : styles.groupTitle}>{t.contacts}</Text>
+        <View style={isComaBank ? layout.comabankRows : styles.surface}>
           {contacts.map(({ type, value }, index) => (
-            <View key={type} style={[layout.contact, index > 0 && layout.divider]}>
+            <View key={type} style={[layout.contact, isComaBank ? layout.comabankContact : index > 0 && layout.divider]}>
               <Pressable accessibilityRole="button" onPress={() => contact(value, type)} testID={'support-' + type}
-                style={({ pressed }) => [layout.contactLink, pressed && layout.pressed]}>
+                style={({ pressed }) => [layout.contactLink, isComaBank && layout.flush,
+                  pressed && (isComaBank ? styles.dimmed : layout.pressed)]}>
                 <FinanceIcon name={type === 'email' ? 'mail' : 'phone'} color={palette.accent} />
                 <View style={layout.contactText}>
                   <Text style={styles.title}>{t[type]}</Text>
@@ -106,17 +108,19 @@ export function SupportScreen({ lang, showHeading = true }: { lang: Language; sh
         {notice === 'clipboard' && <FinanceAlert>{t.clipboard}</FinanceAlert>}
       </View>}
       {!!data.faq.length && <View style={layout.section}>
-        <Text accessibilityRole="header" style={styles.groupTitle}>{t.faq}</Text>
-        <View style={styles.surface}>
+        <Text accessibilityRole="header" style={isComaBank ? styles.section : styles.groupTitle}>{t.faq}</Text>
+        <View style={isComaBank ? layout.comabankRows : styles.surface}>
           {data.faq.map((entry, index) => {
             const open = expanded === entry.id;
             return <View key={entry.id} style={index ? layout.divider : undefined}>
               <Pressable accessibilityRole="button" accessibilityState={{ expanded: open }} testID={'support-faq-' + entry.id}
-                style={({ pressed }) => [layout.question, pressed && layout.pressed]} onPress={() => setExpanded(open ? undefined : entry.id)}>
+                style={({ pressed }) => [layout.question, isComaBank && layout.flush,
+                  pressed && (isComaBank ? styles.dimmed : layout.pressed)]} onPress={() => setExpanded(open ? undefined : entry.id)}>
                 <Text style={[styles.title, layout.questionText]}>{entry.question}</Text>
                 <FinanceIcon name={open ? 'chevron-down' : 'chevron'} color={open ? palette.accent : palette.muted} size={16} />
               </Pressable>
-              {open && <Text selectable style={layout.answer} testID={'support-answer-' + entry.id}>{entry.answer}</Text>}
+              {open && <Text selectable style={[layout.answer, isComaBank && layout.flush]}
+                testID={'support-answer-' + entry.id}>{entry.answer}</Text>}
             </View>;
           })}
         </View>
@@ -134,8 +138,10 @@ export function SupportScreen({ lang, showHeading = true }: { lang: Language; sh
 const layout = StyleSheet.create({
   screen: { gap: 18 },
   section: { gap: 8 },
+  comabankRows: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: palette.line },
   message: { gap: 8, padding: 12 },
   contact: { flexDirection: 'row', alignItems: 'center', paddingRight: 8, gap: 4 },
+  comabankContact: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: palette.line, paddingRight: 0 },
   contactLink: { flex: 1, flexDirection: 'row', alignItems: 'center', minHeight: 62,
     paddingHorizontal: 12, paddingVertical: 8, gap: 10 },
   contactText: { flex: 1, gap: 2 },
@@ -146,6 +152,7 @@ const layout = StyleSheet.create({
     paddingHorizontal: 12, paddingVertical: 10, gap: 10 },
   questionText: { flex: 1 },
   pressed: { backgroundColor: palette.ground },
+  flush: { paddingHorizontal: 0 },
   answer: { color: palette.muted, fontSize: 15, paddingHorizontal: 12, paddingBottom: 12 },
   refresh: { alignItems: 'flex-start' },
 });

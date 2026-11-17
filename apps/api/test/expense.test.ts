@@ -10,7 +10,8 @@ import { buildApp } from '../src/app.ts';
 import { configFromEnv } from '../src/config.ts';
 import { base32, token, verifier } from '../src/crypto.ts';
 import { connect, hasDatabaseError, one, rows } from '../src/db.ts';
-import { accountStatementRowLimit, processScheduleDate, readAccountStatement, recordScheduleDateFailure } from '../src/finance.ts';
+import { runDepositInterestPass } from '../src/deposit-interest-worker.ts';
+import { accountStatementRowLimit, processDepositInterest, processScheduleDate, readAccountStatement, recordScheduleDateFailure } from '../src/finance.ts';
 import { readScheduleDates } from '../src/schedule.ts';
 import type { ScheduleCandidate } from '../src/schedule.ts';
 
@@ -1200,6 +1201,181 @@ test('Finance API against migrated MySQL', async (t) => {
     const restoredReplay = await send(restored, 'recordTransaction', input, session);
     assert.equal(restoredReplay.statusCode, 200, restoredReplay.body);
     assert.deepEqual(restoredReplay.json(), result);
+  });
+
+  await t.test('Monthly deposit capitalization', async (interest) => {
+    const baseline = now;
+    interest.afterEach(() => { now = baseline; });
+
+    async function openDeposit(terms: Partial<Pick<Extract<Body<'createAccount'>, { type: 'deposit' }>,
+      'startDate' | 'maturityDate' | 'openingBalanceMinor'>> = {}) {
+      const owner = await activateOwner();
+      const created = await send(app, 'createAccount', {
+        type: 'deposit', name: 'Monthly deposit', currency: 'EUR', annualRatePercent: '12',
+        startDate: '2027-02-01', maturityDate: '2027-04-15', openingBalanceMinor: '10000000',
+        ...terms, idempotencyKey: owner.newKey(),
+      }, owner.session);
+      assert.equal(created.statusCode, 200, created.body);
+      const { accountId } = created.json<Result<'createAccount'>>();
+      const unlock = async () => {
+        const response = await send(app, 'unlock', { installationSecret: owner.installationSecret, pin: '2837' });
+        assert.equal(response.statusCode, 200, response.body);
+        return response.json<Result<'unlock'>>().token;
+      };
+      const preview = async (session: string) => {
+        const response = await send(app, 'previewDepositInterest', undefined, session, accountId);
+        assert.equal(response.statusCode, 200, response.body);
+        return response.json<Result<'previewDepositInterest'>>();
+      };
+      const process = () => processDepositInterest(db, { userId: owner.userId, accountId }, () => now);
+      return { ...owner, accountId, unlock, preview, process };
+    }
+
+    await interest.test('Concurrent catch-up compounds in order and pays a prorated final period', async () => {
+      const { accountId, process, preview, unlock } = await openDeposit();
+      now = Date.parse('2027-02-28T15:59:59Z');
+      assert.equal(await process(), 0);
+      now = Date.parse('2027-03-31T16:00:00Z');
+      const [pass] = await Promise.all([runDepositInterestPass(db, () => now), process()]);
+      assert.equal(pass.failed, 0);
+      assert.equal(await process(), 0);
+      const session = await unlock();
+      const history = await send(app, 'listAccountHistory', undefined, session, accountId);
+      assert.equal(history.statusCode, 200, history.body);
+      assert.deepEqual(history.json<Result<'listAccountHistory'>>().entries
+        .filter((item) => item.type === 'income')
+        .map((item) => ({ date: item.date, amountMinor: item.amountMinor,
+          automaticInterest: 'automaticInterest' in item ? item.automaticInterest : undefined })), [
+        { date: '2027-04-01', amountMinor: '101000', automaticInterest: true },
+        { date: '2027-03-01', amountMinor: '100000', automaticInterest: true },
+      ]);
+      assert.equal((await preview(session)).balanceMinor, '10201000');
+      assert.equal((await preview(session)).nextDate, '2027-04-15');
+
+      now = Date.parse('2027-04-14T16:00:00Z');
+      assert.equal(await process(), 1);
+      assert.equal(await process(), 0);
+      const final = await preview(await unlock());
+      assert.equal(final.balanceMinor, '10248605');
+      assert.equal(final.nextDate, null);
+    });
+
+    await interest.test('Historical preview preserves a manual payment and applies the missing month once', async () => {
+      now = Date.parse('2027-03-31T16:00:00Z');
+      const { accountId, userId, session, newKey, preview, process } = await openDeposit({ maturityDate: '2027-12-31' });
+      const other = await activateOwner();
+      expectError(await send(app, 'previewDepositInterest', undefined, other.session, accountId), 404, 'NOT_FOUND');
+      const recorded = await send(app, 'recordTransaction', {
+        type: 'income', accountId, date: '2027-03-01', amountMinor: '100000', categoryId: 'deposit-interest',
+        idempotencyKey: newKey(),
+      }, session);
+      assert.equal(recorded.statusCode, 200, recorded.body);
+      assert.equal(await process(), 0);
+
+      const quote = await preview(session);
+      assert.equal(quote.balanceMinor, '10100000');
+      assert.deepEqual(quote.periods.map(({ date, status, calculatedMinor, recordedMinor, changeMinor }) =>
+        ({ date, status, calculatedMinor, recordedMinor, changeMinor })), [
+        { date: '2027-03-01', status: 'existing', calculatedMinor: '100000', recordedMinor: '100000', changeMinor: '0' },
+        { date: '2027-04-01', status: 'post', calculatedMinor: '101000', recordedMinor: '0', changeMinor: '101000' },
+      ]);
+      const body = { previewId: quote.previewId, idempotencyKey: newKey() };
+      const apply = () => send(app, 'applyDepositInterest', body, session, accountId);
+      const [first, second] = await Promise.all([apply(), apply()]);
+      assert.equal(first.statusCode, 200, first.body);
+      assert.equal(second.statusCode, 200, second.body);
+      assert.deepEqual(first.json(), second.json());
+      assert.equal(first.json<Result<'applyDepositInterest'>>().settledPeriods, 2);
+      assert.equal(first.json<Result<'applyDepositInterest'>>().balanceMinor, '10201000');
+      const receipt = await send(app, 'commandStatus', {
+        command: 'deposit.interest.apply', userId, accountId, idempotencyKey: body.idempotencyKey,
+      }, session);
+      assert.equal(receipt.statusCode, 200, receipt.body);
+      assert.deepEqual(receipt.json(), { state: 'committed', result: first.json() });
+      expectError(await send(app, 'applyDepositInterest', { ...body, idempotencyKey: newKey() },
+        session, accountId), 409, 'VERSION_CONFLICT');
+      assert.equal((await preview(session)).nextDate, '2027-05-01');
+      now = Date.parse('2027-04-30T16:00:00Z');
+      assert.equal(await process(), 1);
+    });
+
+    await interest.test('An adjustment covering the due date holds interest until the owner resolves it', async () => {
+      const { accountId, process, preview, unlock, newKey } = await openDeposit({ openingBalanceMinor: '100000' });
+      now = Date.parse('2027-02-28T16:00:00Z');
+      const session = await unlock();
+      const before = await preview(session);
+      const adjusted = await send(app, 'reconcileAccountBalance', {
+        expectedAccountVersion: 1, actualBalanceMinor: '101000', explanation: 'Balance includes bank interest',
+        idempotencyKey: newKey(),
+      }, session, accountId);
+      assert.equal(adjusted.statusCode, 200, adjusted.body);
+      assert.equal(await process(), 0);
+      expectError(await send(app, 'applyDepositInterest', { previewId: before.previewId, idempotencyKey: newKey() },
+        session, accountId), 409, 'VERSION_CONFLICT');
+      const quote = await preview(session);
+      assert.equal(quote.periods[0].status, 'review');
+      const { adjustmentId } = adjusted.json<Result<'reconcileAccountBalance'>>();
+      const applied = await send(app, 'applyDepositInterest', {
+        previewId: quote.previewId, idempotencyKey: newKey(), decision: { action: 'useAdjustment', adjustmentId },
+      }, session, accountId);
+      assert.equal(applied.statusCode, 200, applied.body);
+      assert.equal(applied.json<Result<'applyDepositInterest'>>().balanceMinor, '101000');
+      now = Date.parse('2027-03-31T16:00:00Z');
+      assert.equal(await process(), 1);
+      assert.equal((await preview(await unlock())).balanceMinor, '102010');
+    });
+
+    await interest.test('A different bank payment can be used instead of the calculated amount', async () => {
+      now = Date.parse('2027-02-28T16:00:00Z');
+      const { accountId, process, preview, unlock, session, newKey } = await openDeposit({ openingBalanceMinor: '100000' });
+      const recorded = await send(app, 'recordTransaction', {
+        type: 'income', accountId, date: '2027-03-01', amountMinor: '800', categoryId: 'deposit-interest',
+        idempotencyKey: newKey(),
+      }, session);
+      assert.equal(recorded.statusCode, 200, recorded.body);
+      const quote = await preview(session);
+      assert.equal(quote.periods[0].status, 'review');
+      assert.equal(quote.periods[0].calculatedMinor, '1000');
+      assert.equal(quote.periods[0].recordedMinor, '800');
+      const applied = await send(app, 'applyDepositInterest', {
+        previewId: quote.previewId, idempotencyKey: newKey(),
+        decision: { action: 'useTransaction', transactionId: recorded.json<SingleAccountResult>().transactionId },
+      }, session, accountId);
+      assert.equal(applied.statusCode, 200, applied.body);
+      assert.equal(applied.json<Result<'applyDepositInterest'>>().balanceMinor, '100800');
+
+      now = Date.parse('2027-03-31T16:00:00Z');
+      assert.equal(await process(), 1);
+      assert.equal((await preview(await unlock())).balanceMinor, '101808');
+    });
+
+    await interest.test('Dated movements affect the daily average and a pending scheduled debit holds the calculation', async () => {
+      now = Date.parse('2027-03-31T16:00:00Z');
+      const { accountId, userId, session, newKey, unlock, process, preview } = await openDeposit({
+        startDate: '2027-04-01', maturityDate: '2027-06-01', openingBalanceMinor: '100000',
+      });
+      const schedule = await send(app, 'createScheduleRule', {
+        accountId, kind: 'expense', frequency: 'once', firstDate: '2027-04-21', amountMinor: '200000', categoryId: 'groceries',
+      }, session);
+      assert.equal(schedule.statusCode, 200, schedule.body);
+      const { ruleId } = schedule.json<Result<'createScheduleRule'>>();
+
+      now = Date.parse('2027-04-30T16:00:00Z');
+      const laterSession = await unlock();
+      for (const [date, amountMinor] of [['2027-04-11', '50000'], ['2027-05-01', '150000']]) {
+        const income = await send(app, 'recordTransaction', {
+          type: 'income', accountId, date, amountMinor, categoryId: 'other-income', idempotencyKey: newKey(),
+        }, laterSession);
+        assert.equal(income.statusCode, 200, income.body);
+      }
+      assert.equal(await process(), 0);
+      assert.deepEqual((await preview(laterSession)).blockedBy, { ruleId, reason: 'pending' });
+      await processScheduleDate(db, { userId, accountId, ruleId, date: '2027-04-21' }, () => now);
+      const quote = await preview(laterSession);
+      assert.equal(quote.periods[0].calculatedMinor, '833');
+      assert.equal(await process(), 1);
+      assert.equal((await preview(laterSession)).balanceMinor, '100833');
+    });
   });
 
   await t.test('Other income works on a regular account with exact minor units', async () => {

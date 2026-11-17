@@ -13,6 +13,7 @@ type SingleAccountFields = Omit<Extract<TransactionFields, { accountId: string }
 export type FinanceDraft = { kind: 'account.create'; body: CreateAccount }
   | { kind: 'account.delete'; accountId: string; body: WithoutKey<Body<'deleteAccount'>> }
   | { kind: 'account.reconcile'; accountId: string; body: WithoutKey<Body<'reconcileAccountBalance'>> }
+  | { kind: 'deposit.interest.apply'; accountId: string; body: WithoutKey<Body<'applyDepositInterest'>> }
   | { kind: 'expense.record' | 'income.record'; body: SingleAccountFields }
   | { kind: 'transfer.record'; body: Extract<TransactionFields, { type: 'transfer' }> }
   | { kind: 'transaction.revise'; transactionId: string; body: WithoutKey<Body<'reviseTransaction'>> }
@@ -44,7 +45,7 @@ function commandReference(raw: string, actorId: string): CommandReference {
     const base = { actorId, userId: actorId, idempotencyKey: value.idempotencyKey };
     if (value.command === 'account.create') return { ...base, command: value.command };
     if ((value.command === 'expense.record' || value.command === 'income.record' || value.command === 'account.reconcile' ||
-        value.command === 'account.delete') &&
+        value.command === 'account.delete' || value.command === 'deposit.interest.apply') &&
         'accountId' in value && isId(value.accountId)) {
       return { ...base, command: value.command, accountId: value.accountId };
     }
@@ -80,6 +81,7 @@ function newReference(data: FinanceDraft, actorId: string, idempotencyKey: strin
     case 'account.create': return { ...base, command: data.kind };
     case 'account.delete': return { ...base, command: data.kind, accountId: data.accountId };
     case 'account.reconcile': return { ...base, command: data.kind, accountId: data.accountId };
+    case 'deposit.interest.apply': return { ...base, command: data.kind, accountId: data.accountId };
     case 'expense.record':
     case 'income.record': return { ...base, command: data.kind, accountId: data.body.accountId };
     case 'transfer.record': {
@@ -102,6 +104,9 @@ function writeCommand(token: string, data: FinanceDraft, idempotencyKey: string)
       return request('deleteAccount', { token, params: { accountId: data.accountId }, body: { ...data.body, idempotencyKey } });
     case 'account.reconcile':
       return request('reconcileAccountBalance', { token, params: { accountId: data.accountId },
+        body: { ...data.body, idempotencyKey } });
+    case 'deposit.interest.apply':
+      return request('applyDepositInterest', { token, params: { accountId: data.accountId },
         body: { ...data.body, idempotencyKey } });
     case 'expense.record':
     case 'income.record':

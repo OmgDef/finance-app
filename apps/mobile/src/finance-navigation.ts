@@ -3,7 +3,7 @@ import { financialDate } from './finance-format';
 import type { SchedulePage } from './finance-schedule';
 
 export type AccountEditor = { kind: 'rename' | 'startDate' } | { kind: 'card'; cardId?: string };
-type AccountPage = { name: 'history' | 'manage' | 'reconcile' | 'statement'; accountId: string } |
+type AccountPage = { name: 'history' | 'manage' | 'reconcile' | 'statement' | 'depositInterest'; accountId: string } |
   { name: 'cardDetails'; accountId: string; cardId: string } |
   { name: 'accountEditor'; accountId: string; editor: AccountEditor; fromCardDetails?: boolean };
 export type FinancePage = { name: 'archive' | 'addAccount' | 'accountSettings' } | AccountPage | SchedulePage |
@@ -28,6 +28,7 @@ export function financePage(route: FinanceRoute, params: Record<string, string |
     case 'history':
     case 'manage':
     case 'statement':
+    case 'depositInterest':
     case 'reconcile': return accountId ? { name: route, accountId } : undefined;
     case 'cardDetails': {
       const cardId = routeParameter(params.cardId);
@@ -85,6 +86,7 @@ export function financePath(page: FinancePage): string {
     case 'cardDetails': return `/accounts/${encodeURIComponent(page.accountId)}/cards/${encodeURIComponent(page.cardId)}/details`;
     case 'manage': return '/accounts/' + encodeURIComponent(page.accountId) + '/manage';
     case 'reconcile': return '/accounts/' + encodeURIComponent(page.accountId) + '/reconcile';
+    case 'depositInterest': return '/accounts/' + encodeURIComponent(page.accountId) + '/interest';
     case 'statement': return '/accounts/' + encodeURIComponent(page.accountId) + '/statement';
     case 'accountEditor': {
       const account = '/accounts/' + encodeURIComponent(page.accountId);
