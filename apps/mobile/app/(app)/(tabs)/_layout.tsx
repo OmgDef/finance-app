@@ -5,6 +5,14 @@ import { appTabs } from '../../../src/finance-tabs';
 import { financeIconSources } from '../../../src/finance-icon';
 import { palette } from '../../../src/finance-ui';
 
+const comabankTabIcons = {
+  accounts: require('../../../assets/icons/comabank-tabs/accounts.png'),
+  statistics: require('../../../assets/icons/comabank-tabs/statistics.png'),
+  payments: require('../../../assets/icons/comabank-tabs/payments.png'),
+  help: require('../../../assets/icons/comabank-tabs/help.png'),
+  settings: require('../../../assets/icons/comabank-tabs/settings.png'),
+};
+
 export const unstable_settings = { initialRouteName: 'accounts' };
 
 export default function TabLayout() {
@@ -17,7 +25,7 @@ export default function TabLayout() {
     {appTabs(lang).map(({ route, page, title, icon }) => (
       <NativeTabs.Trigger key={route} name={route} accessibilityLabel={title} testID={'finance-tab-' + page} disableAutomaticContentInsets
         disabled={settingsBusy && route !== 'settings'}>
-        <NativeTabs.Trigger.Icon src={financeIconSources[icon]} renderingMode="template" />
+        <NativeTabs.Trigger.Icon src={isComaBank ? comabankTabIcons[route] : financeIconSources[icon]} renderingMode="template" />
         <NativeTabs.Trigger.Label>{title}</NativeTabs.Trigger.Label>
       </NativeTabs.Trigger>
     ))}

@@ -53,11 +53,11 @@ export function PaymentsScreen({ lang, accountCount, categories, blocked, onReco
       ] as const).map(({ kind, title, label, icon }, index) => {
         const disabled = blocked || accountCount < (kind === 'transfer' ? 2 : 1);
         const primary = index === 0;
-        const color = isComaBank ? (primary ? palette.ground : palette.accent) : primary ? palette.accent : palette.ink;
+        const color = isComaBank || primary ? palette.accent : palette.ink;
         return <Pressable key={kind} accessibilityRole="button" accessibilityLabel={isComaBank ? title : label}
           accessibilityState={{ disabled }} disabled={disabled}
           testID={'finance-' + kind} onPress={() => onRecord(kind)} style={({ pressed }) => [
-            layout.action, isComaBank ? (primary ? layout.comabankPrimary : layout.comabankAction) : [
+            layout.action, isComaBank ? layout.comabankAction : [
               !stack && layout.actionTile, primary && layout.primaryAction,
               !primary && (stack ? layout.divider : layout.actionDivider),
             ], pressed && (isComaBank ? styles.dimmed : layout.pressed), disabled && styles.dimmed,
@@ -65,10 +65,10 @@ export function PaymentsScreen({ lang, accountCount, categories, blocked, onReco
           <FinanceIcon name={icon} color={color} />
           {isComaBank ? <>
             <View style={layout.comabankActionLabels}>
-              <Text style={[styles.title, primary && layout.comabankPrimaryText]}>{title}</Text>
+              <Text style={styles.title}>{title}</Text>
               {kind === 'transfer' && <Text style={styles.meta}>{t.betweenOwnAccounts}</Text>}
             </View>
-            <FinanceIcon name="chevron" size={14} color={primary ? palette.ground : palette.muted} />
+            <FinanceIcon name="chevron" size={14} color={palette.muted} />
           </> : <Text style={styles.title}>{title}</Text>}
         </Pressable>;
       })}
@@ -110,8 +110,6 @@ const layout = StyleSheet.create({
   action: { flexDirection: 'row', alignItems: 'center', gap: 9, paddingHorizontal: 12, paddingVertical: 12, minHeight: 49 },
   actionTile: { flex: 1, flexDirection: 'column', justifyContent: 'center', minHeight: 75 },
   primaryAction: { backgroundColor: palette.selected },
-  comabankPrimary: { backgroundColor: palette.accent, borderRadius: 9, minHeight: 46, paddingHorizontal: 14 },
-  comabankPrimaryText: { color: palette.ground, fontWeight: '700' },
   comabankAction: { paddingHorizontal: 6, minHeight: 52, borderBottomColor: palette.line,
     borderBottomWidth: StyleSheet.hairlineWidth },
   comabankActionLabels: { flex: 1, gap: 2 },

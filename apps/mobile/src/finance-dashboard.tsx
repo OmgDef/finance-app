@@ -5,7 +5,7 @@ import type { ReactNode } from 'react';
 import type { Language, Result } from '@teta/contracts';
 import { isComaBank } from './app-variant';
 import { copy } from './copy';
-import { cashFlowSeries, cashFlowWeeks, WeeklyCashFlowPlot } from './finance-cash-flow';
+import { cashFlowSeries, cashFlowWeeks, NetCashFlowPlot, netCashFlow, WeeklyCashFlowPlot } from './finance-cash-flow';
 import { financeCopy } from './finance-copy';
 import { currencies, currencyName, currencySymbol, formatFinancialDate, formatMoney, formatRate } from './finance-format';
 import { CardNetworkLogo, cardNetworkLabel } from './finance-card-network';
@@ -26,7 +26,7 @@ const rateCurrencies = ['USD', 'EUR'] as const;
 const labels = {
   ru: {
     switchBalance: 'Показать остаток', annual: 'годовых', matures: 'до', moreCards: 'Другие карточки',
-    flow: 'Движение денег', statistics: 'Вся статистика',
+    flow: 'Движение денег', netFlow: 'Чистый поток', statistics: 'Вся статистика',
     noFlow: 'Нет операций за 90 дней.', flowError: 'Не удалось обновить движение денег.',
     rates: 'Курсы валют', source: 'Официальные курсы Банка России', ratesError: 'Не удалось обновить курсы валют.',
     cachedRates: 'Показаны сохранённые курсы.', effective: 'Действует с', change: 'К предыдущему курсу',
@@ -35,7 +35,7 @@ const labels = {
   },
   en: {
     switchBalance: 'Show balance', annual: 'per year', matures: 'until', moreCards: 'More cards',
-    flow: 'Cash flow', statistics: 'View statistics',
+    flow: 'Cash flow', netFlow: 'Net cash flow', statistics: 'View statistics',
     noFlow: 'No transactions in the last 90 days.', flowError: 'Could not update cash flow.',
     rates: 'Exchange rates', source: 'Official Bank of Russia rates', ratesError: 'Could not update exchange rates.',
     cachedRates: 'Showing saved rates.', effective: 'Effective from', change: 'Since the previous rate',
@@ -184,9 +184,11 @@ function Card({ title, detail, action, style, testID, children }: {
   </View>;
 }
 
-function CardLink({ title, onPress, testID }: { title: string; onPress(): void; testID?: string }) {
+function CardLink({ title, onPress, testID, style }: {
+  title: string; onPress(): void; testID?: string; style?: StyleProp<ViewStyle>;
+}) {
   return <Pressable accessibilityRole="button" testID={testID} onPress={onPress}
-    style={({ pressed }) => [layout.link, pressed && styles.dimmed]}>
+    style={({ pressed }) => [layout.link, style, pressed && styles.dimmed]}>
     <Text style={layout.linkText}>{title}</Text>
     <FinanceIcon name="chevron" size={14} color={palette.accent} />
   </Pressable>;
@@ -215,20 +217,78 @@ export function CashFlowCard({ read, accounts, lang, onStatistics }: {
   const weeks = cashFlowWeeks(report, currency);
   const weekIndex = weeks.findIndex(({ fromDate }) => fromDate === selectedWeek);
   const week = weeks[weekIndex];
+  const selection = {
+    index: weekIndex,
+    onSelect: (index: number) => setSelectedWeek(index === weekIndex ? undefined : weeks[index].fromDate),
+  };
 
   const statisticsLink = report && <CardLink title={t.statistics} testID="finance-dashboard-statistics"
+    style={isComaBank && layout.flowStatisticsLink}
     onPress={() => onStatistics({ fromDate: report.fromDate, throughDate: report.throughDate, currency })} />;
+  const currencyControl = <View accessibilityRole="radiogroup" accessibilityLabel={s.currency}
+    style={isComaBank ? layout.flowCurrencies : layout.currencyControl}>
+    {currencies.map((code) => <Pressable key={code} accessibilityRole="radio" accessibilityState={{ checked: code === currency }}
+      accessibilityLabel={isComaBank ? currencyName(code, lang) : undefined}
+      onPress={() => {
+        if (code !== currency) setSelectedWeek(undefined);
+        setSelected(code);
+      }} testID={'finance-dashboard-flow-' + code}
+      style={({ pressed }) => [
+        isComaBank ? layout.flowCurrency : layout.currencyOption,
+        code === currency && (isComaBank ? layout.flowCurrencyActive : layout.selectedCurrency),
+        pressed && styles.dimmed,
+      ]}>
+      <Text style={[isComaBank ? layout.flowCurrencyText : layout.currencyText, code === currency && layout.selectedCurrencyText]}>
+        {isComaBank ? code : currencyName(code, lang)}
+      </Text>
+    </Pressable>)}
+  </View>;
+  const weekDetails = week && <View style={layout.weekDetails} testID="finance-dashboard-week-details" accessibilityLiveRegion="polite">
+    <Text style={styles.groupTitle}>{formatFinancialDate(week.fromDate, lang)} – {formatFinancialDate(week.throughDate, lang)}</Text>
+    {cashFlowSeries.map(({ field, label }) => <View key={field} style={layout.weekMetric}>
+      <Text style={styles.meta}>{s[label]}</Text>
+      <Text style={styles.title}>{formatMoney(week[field], currency, lang)}</Text>
+    </View>)}
+  </View>;
+  const status = <ReadStatus read={read} lang={lang} message={t.flowError} />;
+
+  if (isComaBank) {
+    const net = total ? netCashFlow(total) : 0n;
+    return <View style={layout.flowSection} testID="finance-dashboard-cash-flow">
+      <View style={layout.flowSectionHeader}>
+        <View style={layout.labels}>
+          <Text accessibilityRole="header" style={styles.section}>{t.flow}</Text>
+          <Text style={styles.meta}>{s.recent}</Text>
+        </View>
+        {currencyControl}
+      </View>
+      {report && (total ? <>
+        <View style={layout.flowPanel}>
+          <View style={layout.labels}>
+            <Text style={styles.meta}>{t.netFlow}</Text>
+            <Text style={layout.flowNetValue} testID="finance-dashboard-net-flow" adjustsFontSizeToFit
+              numberOfLines={1} minimumFontScale={0.6}>
+              {net > 0n ? '+' : ''}{formatMoney(String(net), currency, lang)}
+            </Text>
+          </View>
+          {weeks.length > 0 && <NetCashFlowPlot weeks={weeks} currency={currency} lang={lang} selection={selection} />}
+        </View>
+        {cashFlowSeries.map(({ field, label }) => <View key={field} style={layout.flowTotal}>
+          <View style={layout.flowTotalLabel}>
+            <FinanceIcon name={field === 'incomeMinor' ? 'income' : 'expense'} size={16} color={palette.muted} />
+            <Text style={styles.meta}>{s[label]}</Text>
+          </View>
+          <Text style={layout.flowTotalAmount}>{formatMoney(total[field], currency, lang)}</Text>
+        </View>)}
+        {weekDetails}
+      </> : <Text style={[styles.meta, layout.flowPanel]}>{t.noFlow}</Text>)}
+      {status}
+      {statisticsLink}
+    </View>;
+  }
+
   return <Card title={t.flow} detail={s.recent} testID="finance-dashboard-cash-flow" action={statisticsLink}>
-    <View accessibilityRole="radiogroup" accessibilityLabel={s.currency} style={layout.currencyControl}>
-      {currencies.map((code) => <Pressable key={code} accessibilityRole="radio" accessibilityState={{ checked: code === currency }}
-        onPress={() => {
-          if (code !== currency) setSelectedWeek(undefined);
-          setSelected(code);
-        }} testID={'finance-dashboard-flow-' + code}
-        style={({ pressed }) => [layout.currencyOption, code === currency && layout.selectedCurrency, pressed && styles.dimmed]}>
-        <Text style={[layout.currencyText, code === currency && layout.selectedCurrencyText]}>{currencyName(code, lang)}</Text>
-      </Pressable>)}
-    </View>
+    {currencyControl}
     {report && (total ? <>
       <View style={layout.metrics}>
         {cashFlowSeries.map(({ field, label, color }) => <View key={field} style={layout.metric}>
@@ -236,20 +296,13 @@ export function CashFlowCard({ read, accounts, lang, onStatistics }: {
             <View style={[layout.swatch, { backgroundColor: color }]} />
             <Text style={styles.meta}>{s[label]}</Text>
           </View>
-          <Text style={layout.metricValue}>{formatMoney(total?.[field] ?? '0', currency, lang)}</Text>
+          <Text style={layout.metricValue}>{formatMoney(total[field], currency, lang)}</Text>
         </View>)}
       </View>
-      {weeks.length > 0 && <WeeklyCashFlowPlot weeks={weeks} currency={currency} lang={lang} overview
-        selection={{ index: weekIndex, onSelect: (index) => setSelectedWeek(index === weekIndex ? undefined : weeks[index].fromDate) }} />}
-      {week ? <View style={layout.weekDetails} testID="finance-dashboard-week-details" accessibilityLiveRegion="polite">
-        <Text style={styles.groupTitle}>{formatFinancialDate(week.fromDate, lang)} – {formatFinancialDate(week.throughDate, lang)}</Text>
-        {cashFlowSeries.map(({ field, label }) => <View key={field} style={layout.weekMetric}>
-          <Text style={styles.meta}>{s[label]}</Text>
-          <Text style={styles.title}>{formatMoney(week[field], currency, lang)}</Text>
-        </View>)}
-      </View> : null}
+      {weeks.length > 0 && <WeeklyCashFlowPlot weeks={weeks} currency={currency} lang={lang} overview selection={selection} />}
+      {weekDetails}
     </> : <Text style={styles.meta}>{t.noFlow}</Text>)}
-    <ReadStatus read={read} lang={lang} message={t.flowError} />
+    {status}
   </Card>;
 }
 
@@ -435,6 +488,21 @@ const layout = StyleSheet.create({
   link: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', minHeight: 44, gap: 6 },
   linkText: { color: palette.accent, fontSize: 14, fontWeight: '700', flexShrink: 1 },
   loading: { alignSelf: 'flex-start', minHeight: 44 },
+  flowSection: { gap: 12 },
+  flowSectionHeader: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center',
+    justifyContent: 'space-between', columnGap: 10, rowGap: 4 },
+  flowCurrencies: { flexDirection: 'row', flexWrap: 'wrap' },
+  flowCurrency: { minWidth: 44, minHeight: 44, paddingHorizontal: 6, alignItems: 'center', justifyContent: 'center',
+    borderBottomWidth: 2, borderBottomColor: 'transparent' },
+  flowCurrencyActive: { borderBottomColor: palette.accent },
+  flowCurrencyText: { color: palette.muted, fontSize: 12, fontWeight: '700' },
+  flowPanel: { backgroundColor: palette.panel, borderRadius: 14, padding: 14, gap: 12 },
+  flowNetValue: { ...styles.heroValue, fontSize: 32, fontWeight: '700', letterSpacing: -0.8 },
+  flowTotal: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  flowTotalLabel: { flexDirection: 'row', alignItems: 'center', gap: 7, maxWidth: '100%' },
+  flowTotalAmount: { ...styles.value, textAlign: 'right', marginLeft: 'auto' },
+  flowStatisticsLink: { alignSelf: 'stretch', justifyContent: 'space-between',
+    borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: palette.line },
   currencyControl: { flexDirection: 'row', flexWrap: 'wrap', alignSelf: 'flex-start', gap: 4 },
   currencyOption: { minWidth: 52, minHeight: 44, paddingHorizontal: 10, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
   selectedCurrency: { backgroundColor: palette.selected },
